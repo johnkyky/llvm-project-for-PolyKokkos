@@ -153,6 +153,13 @@ public:
                   AssumptionCache *AC = nullptr,
                   std::string Suffix = "");
 
+    // cppoly begin
+    /// Test whether a block is valid for extraction.
+    static bool isBlockValidForExtraction(const BasicBlock &BB,
+                                          const SetVector<BasicBlock *> &Result,
+                                          bool AllowVarArgs, bool AllowAlloca);
+    // cppoly end
+
     /// Perform the extraction, returning the new function.
     ///
     /// Returns zero when called on a CodeExtractor instance where isEligible

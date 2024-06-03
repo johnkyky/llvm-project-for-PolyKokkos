@@ -35,6 +35,7 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/SaveAndRestore.h"
 #include <optional>
+#include <vector>
 
 using namespace clang;
 using namespace CodeGen;
@@ -497,6 +498,22 @@ Address CodeGenFunction::EmitCompoundStmt(const CompoundStmt &S, bool GetLast,
   // Keep track of the current cleanup stack depth, including debug scopes.
   LexicalScope Scope(*this, S.getSourceRange());
 
+  // cppoly begin
+  SourceLocation loc = S.getLBracLoc();
+  std::vector<StringRef> cppoly_keywords = getContext().getCPPolyKeywords(loc);
+  if (!cppoly_keywords.empty()) {
+    unsigned cppoly_mk = Builder.getContext().getMDKindID("cppoly.pragma");
+    std::vector<llvm::Metadata*> md_nodes;
+    for (auto& keyword : cppoly_keywords) {
+      llvm::Metadata *md_string =
+        llvm::MDString::get(Builder.getContext(), llvm::StringRef(keyword));
+      md_nodes.push_back(md_string);
+    }
+    Builder.AddCurrentMetadata(cppoly_mk,
+              llvm::MDNode::get(Builder.getContext(), md_nodes));
+  }
+  // cppoly end
+
   return EmitCompoundStmtWithoutScope(S, GetLast, AggSlot);
 }
 
@@ -550,6 +567,23 @@ CodeGenFunction::EmitCompoundStmtWithoutScope(const CompoundStmt &S,
     }
   }
 
+  // cppoly begin
+  SourceLocation loc = S.getLBracLoc();
+  std::vector<StringRef> cppoly_keywords =
+    getContext().getCPPolyKeywords(loc);
+  if (!cppoly_keywords.empty()) {
+    unsigned cppoly_mk = Builder.getContext().getMDKindID("cppoly.pragma");
+    std::vector<llvm::Metadata*> md_nodes;
+    for (auto& keyword : cppoly_keywords) {
+      llvm::Metadata *md_string =
+	      llvm::MDString::get(Builder.getContext(), llvm::StringRef(keyword));
+      md_nodes.push_back(md_string);
+    }
+    Builder.RemoveCurrentMetadata(cppoly_mk,
+				      llvm::MDNode::get(Builder.getContext(), md_nodes));
+  }
+  // cppoly end
+ 
   return RetAlloca;
 }
 

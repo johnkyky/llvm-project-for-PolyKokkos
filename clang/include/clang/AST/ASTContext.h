@@ -41,6 +41,13 @@
 #include "llvm/Support/TypeSize.h"
 #include <optional>
 
+// cppoly begin
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+// cppoly end
+
 namespace llvm {
 
 class APFixedPoint;
@@ -184,6 +191,11 @@ struct TypeInfoChars {
 /// referred to throughout the semantic analysis of a file.
 class ASTContext : public RefCountedBase<ASTContext> {
   friend class NestedNameSpecifier;
+
+  // cppoly begin
+  // map that holds the lines that have a pragma and the keywords.
+  mutable std::multimap<SourceLocation, StringRef> CPPolyPragmaMap;
+  // cppoly end
 
   mutable SmallVector<Type *, 0> Types;
   mutable llvm::FoldingSet<ExtQuals> ExtQualNodes;
@@ -477,6 +489,37 @@ public:
   /// A type synonym for the TemplateOrInstantiation mapping.
   using TemplateOrSpecializationInfo =
       llvm::PointerUnion<VarTemplateDecl *, MemberSpecializationInfo *>;
+
+  // cppoly begin
+  // accessors for the cppoly pragma map
+  void addCPPolyKeywords(SourceLocation loc,
+       std::vector<StringRef> keywords) {
+    for (auto &k : keywords) {
+      CPPolyPragmaMap.insert(std::pair<SourceLocation, StringRef>(loc, k));
+    }
+  }
+
+  void updateCPPolyKeywords(const SourceLocation& prevLoc,
+       const SourceLocation& newLoc) {
+    auto it = CPPolyPragmaMap.find(prevLoc);
+    while (it != CPPolyPragmaMap.end())
+    {
+      CPPolyPragmaMap.insert(std::make_pair(newLoc, it->second));
+      CPPolyPragmaMap.erase(it);
+      it = CPPolyPragmaMap.find(prevLoc);
+    }
+  }
+
+  std::vector<StringRef> getCPPolyKeywords(SourceLocation loc) {
+    auto range = CPPolyPragmaMap.equal_range(loc);
+
+    std::vector<StringRef> result;
+    for (auto it = range.first; it != range.second; ++it)
+      result.push_back(it->second);
+
+    return result;
+  }
+  // cppoly end
 
 private:
   friend class ASTDeclReader;

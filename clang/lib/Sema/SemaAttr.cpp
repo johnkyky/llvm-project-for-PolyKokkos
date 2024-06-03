@@ -1459,3 +1459,15 @@ bool Sema::checkCommonAttributeFeatures(const Stmt *S, const ParsedAttr &A,
                                         bool SkipArgCountCheck) {
   return ::checkCommonAttributeFeatures(*this, S, A, SkipArgCountCheck);
 }
+
+// cppoly begin
+void Sema::ActOnPragmaCPPoly(std::vector<StringRef> pragma,
+           SourceLocation Loc) {
+  Context.addCPPolyKeywords(Loc, pragma);
+}
+
+void Sema::ActOnPragmaCPPolyUpdate(const SourceLocation& prevLoc,
+           const SourceLocation& newLoc) {
+  Context.updateCPPolyKeywords(prevLoc, newLoc);
+}
+// cppoly end

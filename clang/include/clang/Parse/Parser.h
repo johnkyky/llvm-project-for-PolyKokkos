@@ -224,6 +224,10 @@ class Parser : public CodeCompletionHandler {
 
   std::unique_ptr<CommentHandler> CommentSemaHandler;
 
+  // cppoly begin
+  std::unique_ptr<PragmaHandler> CPPolyHandler;
+  // cppoly end
+
   /// Whether the '>' token acts as an operator or not. This will be
   /// true except when we are parsing an expression within a C++
   /// template argument list, where the '>' closes the template
@@ -844,6 +848,12 @@ private:
   /// Handle the annotation token produced for
   /// #pragma clang loop and #pragma unroll.
   bool HandlePragmaLoopHint(LoopHint &Hint);
+
+  // cppoly begin
+  /// Handle the annotation token produced for
+  /// #pragma cppoly ...
+  StmtResult HandlePragmaCPPoly();
+  // cppoly end
 
   bool ParsePragmaAttributeSubjectMatchRuleSet(
       attr::ParsedSubjectMatchRuleSet &SubjectMatchRules,

@@ -1755,6 +1755,11 @@ public:
   /// Called to set constant rounding mode for floating point operations.
   void ActOnPragmaFEnvRound(SourceLocation Loc, llvm::RoundingMode);
 
+  // cppoly begin
+  void ActOnPragmaCPPoly(std::vector<StringRef> pragma, SourceLocation loc);
+  void ActOnPragmaCPPolyUpdate(const SourceLocation& prevLoc, const SourceLocation& newLoc);
+  // cppoly end
+
   /// Called to set exception behavior for floating point operations.
   void setExceptionMode(SourceLocation Loc, LangOptions::FPExceptionModeKind);
 

@@ -48,6 +48,12 @@
 #include <optional>
 #include <utility>
 
+// cppoly begin
+#include <map>
+#include <set>
+#include <vector>
+// cppoly end
+
 namespace llvm {
 
 class APInt;
@@ -121,6 +127,10 @@ protected:
   LLVMContext &Context;
   const IRBuilderFolder &Folder;
   const IRBuilderDefaultInserter &Inserter;
+
+  // cppoly begin
+  SmallVector<std::pair<unsigned, MDNode*>, 8> CurMetaInfo;
+  // cppoly end
 
   MDNode *DefaultFPMathTag;
   FastMathFlags FMF;
@@ -247,7 +257,42 @@ public:
   void AddMetadataToInst(Instruction *I) const {
     for (const auto &KV : MetadataToCopy)
       I->setMetadata(KV.first, KV.second);
+
+    // cppoly begin
+    std::map<unsigned, std::set<Metadata*> > simplified;
+    for (auto pair : CurMetaInfo) {
+      unsigned mk = pair.first;
+      MDNode* node = pair.second;
+
+      if (simplified.count(mk) == 0) // Use an empty set if necessary
+        simplified[mk] = std::set<Metadata*>();
+
+      for (unsigned i = 0; i < node->getNumOperands(); ++i)
+        simplified[mk].insert((node->getOperand(i)).get());
+    }
+
+    for (auto pair : simplified) {
+      std::vector<Metadata*> mddata;
+      mddata.insert(mddata.end(), pair.second.begin(), pair.second.end());
+      I->setMetadata(pair.first, MDNode::get(getContext(), mddata));
+    }
+    // cppoly end
   }
+
+  // cppoly begin
+  void AddCurrentMetadata(unsigned mk, MDNode* node) {
+    CurMetaInfo.push_back(std::make_pair(mk, node));
+  }
+
+  void RemoveCurrentMetadata(unsigned mk, MDNode* node) {
+    auto cp = std::make_pair(mk, node);
+
+    auto search = std::find(CurMetaInfo.begin(), CurMetaInfo.end(), cp);
+    if (search != CurMetaInfo.end()) {
+      CurMetaInfo.erase(search);
+    }
+  }
+  // cppoly end
 
   /// Get the return type of the current function that we're emitting
   /// into.

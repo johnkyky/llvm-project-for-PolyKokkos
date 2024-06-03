@@ -31,6 +31,16 @@ using namespace clang;
 
 namespace {
 
+// cppoly begin
+struct PragmaCPPoly : public PragmaHandler {
+  explicit PragmaCPPoly(Sema &A) : PragmaHandler("cppoly"), Actions(A) {}
+  void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
+                    Token &FirstToken) override;
+  private:
+  	Sema &Actions;
+};
+// cppoly end
+
 struct PragmaAlignHandler : public PragmaHandler {
   explicit PragmaAlignHandler() : PragmaHandler("align") {}
   void HandlePragma(Preprocessor &PP, PragmaIntroducer Introducer,
@@ -568,6 +578,11 @@ void Parser::initializePragmaHandlers() {
     RISCVPragmaHandler = std::make_unique<PragmaRISCVHandler>(Actions);
     PP.AddPragmaHandler("clang", RISCVPragmaHandler.get());
   }
+
+  // cppoly begin
+  CPPolyHandler.reset(new PragmaCPPoly(Actions));
+  PP.AddPragmaHandler(CPPolyHandler.get());
+  // cppoly end
 }
 
 void Parser::resetPragmaHandlers() {
@@ -702,6 +717,11 @@ void Parser::resetPragmaHandlers() {
     PP.RemovePragmaHandler("clang", RISCVPragmaHandler.get());
     RISCVPragmaHandler.reset();
   }
+
+  // cppoly begin
+  PP.RemovePragmaHandler(CPPolyHandler.get());
+  CPPolyHandler.reset();
+  // cppoly end
 }
 
 /// Handle the annotation token produced for #pragma unused(...)
@@ -961,6 +981,32 @@ StmtResult Parser::HandlePragmaCaptured()
 
   return Actions.ActOnCapturedRegionEnd(R.get());
 }
+
+// cppoly begin
+StmtResult Parser::HandlePragmaCPPoly()
+{
+  // we check that the annotation was the one we wanted
+  assert(Tok.is(tok::annot_pragma_cppoly));
+  SourceLocation NameLoc = ConsumeAnnotationToken();
+
+  // verification for opening braces
+  if (Tok.isNot(tok::l_brace)) {
+    PP.Diag(Tok, diag::err_expected) << tok::l_brace;
+    return StmtError();
+  }
+
+  // we update the location
+  Actions.ActOnPragmaCPPolyUpdate(NameLoc, Tok.getLocation());
+
+  // we parse the scope inside the braces
+  ParseScope CPPolyLoopScope(this, Scope::DeclScope | Scope::CompoundStmtScope);
+
+  StmtResult R = ParseCompoundStatement();
+  CPPolyLoopScope.Exit();
+
+  return R;
+}
+// cppoly end
 
 namespace {
   enum OpenCLExtState : char {
@@ -2508,6 +2554,46 @@ void PragmaUnusedHandler::HandlePragma(Preprocessor &PP,
   PP.EnterTokenStream(Toks, /*DisableMacroExpansion=*/true,
                       /*IsReinject=*/false);
 }
+
+// cppoly begin
+// #pragma cppoly
+void PragmaCPPoly::HandlePragma(Preprocessor &PP,
+				PragmaIntroducer Introducer,
+				Token &UnusedTok) {
+  Token Tok;
+  PP.Lex(Tok);
+
+  //here I put the literals that will be attached as metadata.
+  std::vector<StringRef> keywords;
+
+  while (Tok.is(tok::identifier)) {
+    IdentifierInfo *info = Tok.getIdentifierInfo();
+    keywords.push_back(info->getName());
+
+    PP.Lex(Tok);
+  }
+
+  if(Tok.isNot(tok::eod)) {
+    PP.Diag(Tok, diag::err_expected) << tok::identifier;
+    return;
+  }
+
+  // LookAhead not autorised anymore, we have to move the braces analysis to the parser
+  // Check the pragma clang __debug captured for info (or search annot_pragma_captured)
+  SourceLocation NameLoc = Tok.getLocation();
+  // We first insert the keywords with the "wrong" location - the annotation location -
+  Actions.ActOnPragmaCPPoly(keywords, NameLoc);
+  
+  MutableArrayRef<Token> Toks(
+      PP.getPreprocessorAllocator().Allocate<Token>(1), 1);
+  Toks[0].startToken();
+  Toks[0].setKind(tok::annot_pragma_cppoly);
+  Toks[0].setLocation(NameLoc);
+  
+  PP.EnterTokenStream(Toks, /*DisableMacroExpansion=*/true,
+                      /*IsReinject=*/false);
+}
+// cppoly end
 
 // #pragma weak identifier
 // #pragma weak identifier '=' identifier

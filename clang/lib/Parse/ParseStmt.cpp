@@ -474,6 +474,13 @@ Retry:
     ProhibitAttributes(GNUAttrs);
     return HandlePragmaCaptured();
 
+  // cppoly begin
+  case tok::annot_pragma_cppoly:
+    ProhibitAttributes(CXX11Attrs);
+    ProhibitAttributes(GNUAttrs);
+    return HandlePragmaCPPoly();
+  // cppoly end
+
   case tok::annot_pragma_openmp:
     // Prohibit attributes that are not OpenMP attributes, but only before
     // processing a #pragma omp clause.
