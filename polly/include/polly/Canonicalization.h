@@ -11,6 +11,8 @@
 
 #include "llvm/Passes/PassBuilder.h"
 
+using namespace llvm;
+
 namespace llvm {
 namespace legacy {
 class PassManagerBase;
@@ -31,6 +33,11 @@ void registerCanonicalicationPasses(llvm::legacy::PassManagerBase &PM);
 llvm::FunctionPassManager
 buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
                                   llvm::OptimizationLevel Level);
+
+struct PollyCanonicalizeRewrite final
+    : PassInfoMixin<PollyCanonicalizeRewrite> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
 
 } // namespace polly
 

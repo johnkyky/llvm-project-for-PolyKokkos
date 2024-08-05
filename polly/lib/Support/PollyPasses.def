@@ -1,8 +1,25 @@
+#ifndef MODULE_ANALYSIS
+#define MODULE_ANALYSIS(NAME, CREATE_PASS)
+#endif
+MODULE_ANALYSIS("polly-analysis-module-test", AnalysisModuleTest())
+#undef MODULE_ANALYSIS
+
+#ifndef MODULE_PASS
+#define MODULE_PASS(NAME, CREATE_PASS)
+#endif
+MODULE_PASS("polly-module-test", ModulePassTest())
+MODULE_PASS("print<polly-analysis-module-test>", AnalysisModulePrinterPassTest(llvm::errs()))
+//MODULE_PASS("polly-canonicalize-rewrite", PollyCanonicalizeRewrite())
+#undef MODULE_PASS
+
+
 #ifndef FUNCTION_ANALYSIS
 #define FUNCTION_ANALYSIS(NAME, CREATE_PASS)
 #endif
 FUNCTION_ANALYSIS("polly-detect", ScopAnalysis())
 FUNCTION_ANALYSIS("polly-function-scops", ScopInfoAnalysis())
+FUNCTION_ANALYSIS("polly-analysis", ScopInfoAnalysis())
+FUNCTION_ANALYSIS("polly-analysis-function-test", AnalysisFunctionTest())
 #undef FUNCTION_ANALYSIS
 
 #ifndef FUNCTION_PASS
@@ -15,6 +32,9 @@ FUNCTION_PASS("polly-scop-viewer", ScopViewer())
 FUNCTION_PASS("polly-scop-only-viewer", ScopOnlyViewer())
 FUNCTION_PASS("polly-scop-printer", ScopPrinter())
 FUNCTION_PASS("polly-scop-only-printer", ScopOnlyPrinter())
+FUNCTION_PASS("polly-function-test", FunctionPassTest())
+FUNCTION_PASS("print<polly-analysis-function-test>", AnalysisFunctionPrinterPassTest(llvm::errs()))
+FUNCTION_PASS("polly-canonicalize-rewrite", PollyCanonicalizeRewrite())
 #undef FUNCTION_PASS
 
 #ifndef SCOP_ANALYSIS

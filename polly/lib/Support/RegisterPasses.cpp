@@ -39,6 +39,8 @@
 #include "polly/Simplify.h"
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
+#include "polly/Test/FunctionPassTest.h"
+#include "polly/Test/ModulePassTest.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
@@ -452,6 +454,38 @@ createScopAnalyses(FunctionAnalysisManager &FAM,
   return Proxy;
 }
 
+static void registerModuleAnalyses(llvm::ModuleAnalysisManager &MAM,
+                                   PassInstrumentationCallbacks *PIC) {
+
+#define MODULE_ANALYSIS(NAME, CREATE_PASS)                                     \
+  MAM.registerPass([] { return CREATE_PASS; });
+
+#include "PollyPasses.def"
+}
+
+static bool
+parseModulePipeline(StringRef Name, llvm::ModulePassManager &MPM,
+                    ArrayRef<PassBuilder::PipelineElement> Pipeline) {
+  if (llvm::parseAnalysisUtilityPasses<OwningScopAnalysisManagerFunctionProxy>(
+          "polly-scop-analyses", Name, MPM))
+    return true;
+
+#define MODULE_ANALYSIS(NAME, CREATE_PASS)                                     \
+  if (llvm::parseAnalysisUtilityPasses<                                        \
+          std::remove_reference<decltype(CREATE_PASS)>::type>(NAME, Name,      \
+                                                              MPM))            \
+    return true;
+
+#define MODULE_PASS(NAME, CREATE_PASS)                                         \
+  if (Name == NAME) {                                                          \
+    MPM.addPass(CREATE_PASS);                                                  \
+    return true;                                                               \
+  }
+
+#include "PollyPasses.def"
+  return false;
+}
+
 static void registerFunctionAnalyses(FunctionAnalysisManager &FAM,
                                      PassInstrumentationCallbacks *PIC) {
 
@@ -592,10 +626,21 @@ parseTopLevelPipeline(llvm::ModulePassManager &MPM,
 /// handle LICMed code to make it useful.
 void registerPollyPasses(PassBuilder &PB) {
   PassInstrumentationCallbacks *PIC = PB.getPassInstrumentationCallbacks();
+
+  // Register module analyses and module passes
+  PB.registerAnalysisRegistrationCallback(
+      [PIC](llvm::ModuleAnalysisManager &MAM) {
+        registerModuleAnalyses(MAM, PIC);
+      });
+  PB.registerPipelineParsingCallback(parseModulePipeline);
+
+  // Register function analyses and function passes
   PB.registerAnalysisRegistrationCallback([PIC](FunctionAnalysisManager &FAM) {
     registerFunctionAnalyses(FAM, PIC);
   });
   PB.registerPipelineParsingCallback(parseFunctionPipeline);
+
+  // Register scop analyses and scop passes
   PB.registerPipelineParsingCallback(
       [PIC](StringRef Name, FunctionPassManager &FPM,
             ArrayRef<PassBuilder::PipelineElement> Pipeline) -> bool {

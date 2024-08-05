@@ -57,6 +57,30 @@ void polly::registerCanonicalicationPasses(llvm::legacy::PassManagerBase &PM) {
   PM.add(llvm::createInstructionCombiningPass());
 }
 
+FunctionPassManager registerCanonicalicationPassesNPM() {
+  bool UseMemSSA = true;
+
+  FunctionPassManager FPM;
+  FPM.addPass(PromotePass());
+  FPM.addPass(EarlyCSEPass(UseMemSSA));
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(SimplifyCFGPass());
+  FPM.addPass(TailCallElimPass());
+  FPM.addPass(SimplifyCFGPass());
+  FPM.addPass(ReassociatePass());
+
+  if (PollyInliner) {
+    FPM.addPass(PromotePass());
+    FPM.addPass(SimplifyCFGPass());
+    FPM.addPass(InstCombinePass());
+    // TODO: Add BarrierNoopPass ??
+    // FPM.addPass(createBarrierNoopPass());
+  }
+  FPM.addPass(InstCombinePass());
+
+  return FPM;
+}
+
 /// Adapted from llvm::PassBuilder::buildInlinerPipeline
 static ModuleInlinerWrapperPass
 buildInlinePasses(llvm::OptimizationLevel Level) {
@@ -173,3 +197,14 @@ INITIALIZE_PASS_BEGIN(PollyCanonicalize, "polly-canonicalize",
                       "Polly - Run canonicalization passes", false, false)
 INITIALIZE_PASS_END(PollyCanonicalize, "polly-canonicalize",
                     "Polly - Run canonicalization passes", false, false)
+
+PreservedAnalyses PollyCanonicalizeRewrite::run(Function &F,
+                                                FunctionAnalysisManager &AM) {
+  llvm::errs() << "polly-canonicalize-rewrite\n";
+
+  // TODO: Use the fonction used in the pipeline
+  llvm::FunctionPassManager FPM = registerCanonicalicationPassesNPM();
+  FPM.run(F, AM);
+
+  return PreservedAnalyses::none();
+}
