@@ -40,6 +40,7 @@
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
 #include "polly/Test/FunctionPassTest.h"
+#include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -304,6 +305,8 @@ static bool shouldEnablePollyForDiagnostic() {
 static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
+  PM.addPass(MarkFunctionToFindScop());
+
   PassBuilder PB;
   ScopPassManager SPM;
 

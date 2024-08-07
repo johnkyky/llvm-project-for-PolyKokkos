@@ -89,6 +89,7 @@ add_llvm_pass_plugin(Polly
   Transform/MatmulOptimizer.cpp
 
   Test/FunctionPassTest.cpp
+  Test/MarkFunctionToFindScop.cpp
   Test/ModulePassTest.cpp
 
   ${POLLY_HEADER_FILES}

@@ -33,6 +33,7 @@ FUNCTION_PASS("polly-scop-only-viewer", ScopOnlyViewer())
 FUNCTION_PASS("polly-scop-printer", ScopPrinter())
 FUNCTION_PASS("polly-scop-only-printer", ScopOnlyPrinter())
 FUNCTION_PASS("polly-function-test", FunctionPassTest())
+FUNCTION_PASS("polly-markfunction", MarkFunctionToFindScop())
 FUNCTION_PASS("print<polly-analysis-function-test>", AnalysisFunctionPrinterPassTest(llvm::errs()))
 FUNCTION_PASS("polly-canonicalize-rewrite", PollyCanonicalizeRewrite())
 #undef FUNCTION_PASS

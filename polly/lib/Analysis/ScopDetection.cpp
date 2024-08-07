@@ -120,6 +120,11 @@ static cl::list<std::string> OnlyFunctions(
              "ANY of the regexes provided."),
     cl::CommaSeparated, cl::cat(PollyCategory));
 
+static cl::opt<bool> PollyManualDetection(
+    "polly-manual-scop-detection",
+    cl::desc("Only run scop detection on functions containing a pragma cppoly"),
+    cl::init(false), cl::cat(PollyCategory));
+
 static cl::list<std::string> IgnoredFunctions(
     "polly-ignore-func",
     cl::desc("Ignore functions that match a regex. "
@@ -2037,7 +2042,15 @@ ScopDetection ScopAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
   auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(F);
 
   ScopDetection Result(DT, SE, LI, RI, AA, ORE);
-  Result.detect(F);
+
+  if (not PollyManualDetection or
+      (PollyManualDetection and F.hasFnAttribute("MyCustomAttribute") and
+       F.getMetadata("polly"))) {
+    llvm::errs() << "on fait la recherche des scop dans " << F.getName()
+                 << "\n";
+
+    Result.detect(F);
+  }
   return Result;
 }
 
