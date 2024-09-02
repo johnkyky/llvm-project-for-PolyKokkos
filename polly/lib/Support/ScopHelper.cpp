@@ -595,6 +595,8 @@ bool polly::isIgnoredIntrinsic(const Value *V) {
     // Some debug info intrinsics are supported/ignored.
     case llvm::Intrinsic::dbg_value:
     case llvm::Intrinsic::dbg_declare:
+    // Alias scopes are supported/ignored.
+    case llvm::Intrinsic::experimental_noalias_scope_decl:
       return true;
     default:
       break;

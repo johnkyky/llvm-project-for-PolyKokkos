@@ -40,6 +40,7 @@
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
 #include "polly/Test/FunctionPassTest.h"
+#include "polly/Test/FunctionScopInliner.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
 #include "llvm/Analysis/CFGPrinter.h"
@@ -50,7 +51,10 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include "llvm/Transforms/IPO/Inliner.h"
 
 namespace cl = llvm::cl;
 
@@ -305,12 +309,11 @@ static bool shouldEnablePollyForDiagnostic() {
 static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
-  PM.addPass(MarkFunctionToFindScop());
+  PM.addPass(CodePreparationPass());
+  PM.addPass(FuncCallScopInliner());
 
   PassBuilder PB;
   ScopPassManager SPM;
-
-  PM.addPass(CodePreparationPass());
 
   // TODO add utility passes for the various command line options, once they're
   // ported
@@ -393,6 +396,8 @@ static void buildEarlyPollyPipeline(llvm::ModulePassManager &MPM,
   if (!shouldEnablePollyForDiagnostic() && !EnableForOpt)
     return;
 
+  MPM.addPass(MarkFunctionToFindScopModule());
+
   FunctionPassManager FPM = buildCanonicalicationPassesForNPM(MPM, Level);
 
   if (DumpBefore || !DumpBeforeFile.empty()) {
@@ -413,6 +418,16 @@ static void buildEarlyPollyPipeline(llvm::ModulePassManager &MPM,
     MPM.addPass(DumpModulePass("-after", true));
   for (auto &Filename : DumpAfterFile)
     MPM.addPass(DumpModulePass(Filename, false));
+}
+
+static void buildPrepareForLatePollyPipeline(llvm::ModulePassManager &MPM,
+                                             llvm::OptimizationLevel Level) {
+  bool EnableForOpt =
+      shouldEnablePollyForOptimization() && Level.isOptimizingForSpeed();
+  if (!shouldEnablePollyForDiagnostic() && !EnableForOpt)
+    return;
+
+  MPM.addPass(MarkFunctionToFindScopModule());
 }
 
 static void buildLatePollyPipeline(FunctionPassManager &PM,
@@ -660,6 +675,7 @@ void registerPollyPasses(PassBuilder &PB) {
     PB.registerPipelineStartEPCallback(buildEarlyPollyPipeline);
     break;
   case POSITION_BEFORE_VECTORIZER:
+    PB.registerPipelineStartEPCallback(buildPrepareForLatePollyPipeline);
     PB.registerVectorizerStartEPCallback(buildLatePollyPipeline);
     break;
   }

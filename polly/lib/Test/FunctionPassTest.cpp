@@ -10,16 +10,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/FunctionPassTest.h"
-#include <iostream>
-
-using namespace polly;
-
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-
 #include <iostream>
 
 using namespace llvm;
+using namespace polly;
 
 AnalysisKey AnalysisFunctionTest::Key;
 

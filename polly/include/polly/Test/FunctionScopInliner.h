@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef POLLY_MARKFUNCTIONTOFINDSCOP_H
-#define POLLY_MARKFUNCTIONTOFINDSCOP_H
+#ifndef POLLY_FUNCTIONSCOPINLINER_H
+#define POLLY_FUNCTIONSCOPINLINER_H
 
 #include "llvm/IR/PassManager.h"
 
@@ -15,15 +15,10 @@ using namespace llvm;
 
 namespace polly {
 
-struct MarkFunctionToFindScop final : PassInfoMixin<MarkFunctionToFindScop> {
+struct FuncCallScopInliner final : PassInfoMixin<FuncCallScopInliner> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-};
-
-struct MarkFunctionToFindScopModule final
-    : PassInfoMixin<MarkFunctionToFindScopModule> {
-  PreservedAnalyses run(Module &F, ModuleAnalysisManager &AM);
 };
 
 } // namespace polly
 
-#endif // POLLY_MARKFUNCTIONTOFINDSCOP_H
+#endif // POLLY_FUNCTIONSCOPINLINER_H

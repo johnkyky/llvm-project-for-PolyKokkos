@@ -1239,7 +1239,10 @@ bool ScopDetection::isValidInstruction(Instruction &Inst,
   // We only check the call instruction but not invoke instruction.
   if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
     if (isValidCallInst(*CI, Context))
+    if (isValidCallInst(*CI, Context)) {
+      CI->setMetadata("cppoly.inline", MDNode::get(CI->getContext(), {}));
       return true;
+    }
 
     return invalid<ReportFuncCall>(Context, /*Assert=*/true, &Inst);
   }
