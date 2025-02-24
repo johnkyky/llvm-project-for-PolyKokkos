@@ -55,6 +55,14 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+
+//
+#include "isl/aff.h"
+#include "isl/local_space.h"
+#include "isl/map.h"
+#include "isl/options.h"
+#include "isl/set.h"
+//
 #include <cassert>
 
 using namespace llvm;
@@ -1110,12 +1118,15 @@ void ScopBuilder::buildPHIAccesses(ScopStmt *PHIStmt, PHINode *PHI,
         ensureValueRead(Op, OpStmt);
       continue;
     }
-
+    // errs() << "jsp comment pleurer\n";
+    // errs() << "op : " << *Op << "\n";
+    // errs() << "OpStmt : " << *OpStmt->getBaseName() << "\n";
     OnlyNonAffineSubRegionOperands = false;
     ensurePHIWrite(PHI, OpStmt, OpBB, Op, IsExitBlock);
   }
 
   if (!OnlyNonAffineSubRegionOperands && !IsExitBlock) {
+    errs() << "je comprend rien\n";
     addPHIReadAccess(PHIStmt, PHI);
   }
 }
@@ -1176,11 +1187,13 @@ static isl::multi_union_pw_aff mapToDimension(isl::union_set USet, unsigned N) {
 }
 
 void ScopBuilder::buildSchedule() {
+  llvm::errs() << "buildSchedule run\n";
   Loop *L = getLoopSurroundingScop(*scop, LI);
   LoopStackTy LoopStack({LoopStackElementTy(L, {}, 0)});
   buildSchedule(scop->getRegion().getNode(), LoopStack);
   assert(LoopStack.size() == 1 && LoopStack.back().L == L);
   scop->setScheduleTree(LoopStack[0].Schedule);
+  llvm::errs() << "buildSchedule end\n";
 }
 
 /// To generate a schedule for the elements in a Region we traverse the Region
@@ -1502,6 +1515,21 @@ bool ScopBuilder::buildAccessMultiDimFixed(MemAccInst Inst, ScopStmt *Stmt) {
 
   addArrayAccess(Stmt, Inst, AccType, BasePointer->getValue(), ElementType,
                  true, Subscripts, SizesSCEV, Val);
+
+  errs() << "Address " << *Address << "\n";
+  errs() << "Val " << *Val << "\n";
+  errs() << "ElementType " << *ElementType << "\n";
+  errs() << "AccessFunction " << *AccessFunction << "\n";
+  errs() << "BasePointer " << *BasePointer << "\n";
+
+  for (const auto *Subscript : Subscripts)
+    errs() << "Subscript " << *Subscript << "\n";
+  for (const auto *Size : SizesSCEV)
+    if (Size)
+      errs() << "Size " << *Size << "\n";
+    else
+      errs() << "Size nullptr" << "\n";
+
   return true;
 }
 
@@ -1527,7 +1555,16 @@ bool ScopBuilder::buildAccessMultiDimParam(MemAccInst Inst, ScopStmt *Stmt) {
 
   assert(BasePointer && "Could not find base pointer");
 
+  errs() << "Address " << *Address << "\n";
+  errs() << "Val " << *Val << "\n";
+  errs() << "ElementType " << *ElementType << "\n";
+  errs() << "AccessFunction " << *AccessFunction << "\n";
+  errs() << "BasePointer " << *BasePointer << "\n";
+
   auto &InsnToMemAcc = scop->getInsnToMemAccMap();
+  for (auto [key, value] : InsnToMemAcc) {
+    errs() << "key " << *key << "   value " << *value.Insn << "\n";
+  }
   auto AccItr = InsnToMemAcc.find(Inst);
   if (AccItr == InsnToMemAcc.end())
     return false;
@@ -1536,6 +1573,12 @@ bool ScopBuilder::buildAccessMultiDimParam(MemAccInst Inst, ScopStmt *Stmt) {
 
   Sizes.insert(Sizes.end(), AccItr->second.Shape->DelinearizedSizes.begin(),
                AccItr->second.Shape->DelinearizedSizes.end());
+
+  for (const auto *Size : Sizes)
+    if (Size)
+      errs() << "Size " << *Size << "\n";
+    else
+      errs() << "Size nullptr" << "\n";
 
   // In case only the element size is contained in the 'Sizes' array, the
   // access does not access a real multi-dimensional array. Hence, we allow
@@ -1700,6 +1743,12 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
   assert(BasePointer && "Could not find base pointer");
   AccessFunction = SE.getMinusSCEV(AccessFunction, BasePointer);
 
+  errs() << "Address " << *Address << "\n";
+  errs() << "Val " << *Val << "\n";
+  errs() << "ElementType " << *ElementType << "\n";
+  errs() << "AccessFunction " << *AccessFunction << "\n";
+  errs() << "BasePointer " << *BasePointer << "\n";
+
   // Check if the access depends on a loop contained in a non-affine subregion.
   bool isVariantInNonAffineLoop = false;
   SetVector<const Loop *> Loops;
@@ -1731,20 +1780,42 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
 }
 
 void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
-  if (buildAccessMemIntrinsic(Inst, Stmt))
+  // llvm::errs() << "build memory access for " << *Inst.get() << "\n";
+  errs() << "\n";
+  if (buildAccessMemIntrinsic(Inst, Stmt)) {
+    Inst->print(errs(), true);
+    errs() << " " << "buildAccessMemIntrinsic\n";
     return;
+  }
+  errs() << " " << "buildAccessMemIntrinsic passed\n";
 
-  if (buildAccessCallInst(Inst, Stmt))
+  if (buildAccessCallInst(Inst, Stmt)) {
+    Inst->print(errs(), true);
+    errs() << " " << "buildAccessCallInst\n";
     return;
+  }
+  errs() << " " << "buildAccessCallInst passed\n";
 
-  if (buildAccessMultiDimFixed(Inst, Stmt))
+  if (buildAccessMultiDimFixed(Inst, Stmt)) {
+    Inst->print(errs(), true);
+    errs() << " " << "buildAccessMultiDimFixed\n";
     return;
+  }
+  errs() << " " << "buildAccessMultiDimFixed passed\n";
 
-  if (buildAccessMultiDimParam(Inst, Stmt))
+  if (buildAccessMultiDimParam(Inst, Stmt)) {
+    Inst->print(errs(), true);
+    errs() << " " << "buildAccessMultiDimParam\n";
     return;
+  }
+  errs() << " " << "buildAccessMultiDimParam passed\n";
 
-  if (buildAccessSingleDim(Inst, Stmt))
+  if (buildAccessSingleDim(Inst, Stmt)) {
+    Inst->print(errs(), true);
+    errs() << " " << "buildAccessSingleDim\n";
     return;
+  }
+  errs() << " " << "buildAccessSingleDim passed\n";
 
   llvm_unreachable(
       "At least one of the buildAccess functions must handled this access, or "
@@ -1818,8 +1889,10 @@ void ScopBuilder::buildSequentialBlockStmts(BasicBlock *BB, bool SplitOnStore) {
   long BBIdx = scop->getNextStmtIdx();
   std::vector<Instruction *> Instructions;
   for (Instruction &Inst : *BB) {
-    if (shouldModelInst(&Inst, SurroundingLoop))
+    if (shouldModelInst(&Inst, SurroundingLoop)) {
       Instructions.push_back(&Inst);
+      // llvm::errs() << "\ton peut model " << Inst << "\n";
+    }
     if (Inst.getMetadata("polly_split_after") ||
         (SplitOnStore && isa<StoreInst>(Inst))) {
       std::string Name = makeStmtName(BB, BBIdx, Count, Count == 0);
@@ -2027,6 +2100,10 @@ void ScopBuilder::buildEqivClassBlockStmts(BasicBlock *BB) {
 }
 
 void ScopBuilder::buildStmts(Region &SR) {
+  llvm::errs() << "buildStmts function\n";
+  std::string AffineStr =
+      scop->isNonAffineSubRegion(&SR) ? "No affine" : "Affine";
+  llvm::errs() << "\tregion " << AffineStr << " -> " << SR << "\n";
   if (scop->isNonAffineSubRegion(&SR)) {
     std::vector<Instruction *> Instructions;
     Loop *SurroundingLoop =
@@ -2040,7 +2117,7 @@ void ScopBuilder::buildStmts(Region &SR) {
     return;
   }
 
-  for (auto I = SR.element_begin(), E = SR.element_end(); I != E; ++I)
+  for (auto I = SR.element_begin(), E = SR.element_end(); I != E; ++I) {
     if (I->isSubRegion())
       buildStmts(*I->getNodeAs<Region>());
     else {
@@ -2057,6 +2134,8 @@ void ScopBuilder::buildStmts(Region &SR) {
         break;
       }
     }
+  }
+  llvm::errs() << "\tbuildStmts end function for " << SR << "\n";
 }
 
 void ScopBuilder::buildAccessFunctions(ScopStmt *Stmt, BasicBlock &BB,
@@ -2071,11 +2150,14 @@ void ScopBuilder::buildAccessFunctions(ScopStmt *Stmt, BasicBlock &BB,
   if (SD.isErrorBlock(BB, scop->getRegion()))
     return;
 
+  errs() << "on travaille sur le stmt : " << Stmt->getBaseName() << "\n";
   auto BuildAccessesForInst = [this, Stmt,
                                NonAffineSubRegion](Instruction *Inst) {
     PHINode *PHI = dyn_cast<PHINode>(Inst);
-    if (PHI)
+    if (PHI) {
+      errs() << "Inst phi : " << *Inst << "\n";
       buildPHIAccesses(Stmt, PHI, NonAffineSubRegion, false);
+    }
 
     if (auto MemInst = MemAccInst::dyn_cast(*Inst)) {
       assert(Stmt && "Cannot build access function in non-existing statement");
@@ -2715,10 +2797,9 @@ void ScopBuilder::addUserContext() {
     if (NameContext != NameUserContext) {
       std::string SpaceStr = stringFromIslObj(Space, "null");
       errs() << "Error: the name of dimension " << i
-             << " provided in -polly-context "
-             << "is '" << NameUserContext << "', but the name in the computed "
-             << "context is '" << NameContext
-             << "'. Due to this name mismatch, "
+             << " provided in -polly-context " << "is '" << NameUserContext
+             << "', but the name in the computed " << "context is '"
+             << NameContext << "'. Due to this name mismatch, "
              << "the -polly-context option is ignored. Please provide "
              << "the context in the parameter space: " << SpaceStr << ".\n";
       return;
@@ -3226,6 +3307,7 @@ static isl::set getAccessDomain(MemoryAccess *MA) {
 }
 
 bool ScopBuilder::buildAliasChecks() {
+  errs() << "buildAliasChecks run\n";
   if (!PollyUseRuntimeAliasChecks)
     return true;
 
@@ -3234,6 +3316,7 @@ bool ScopBuilder::buildAliasChecks() {
     // collect statistics so we do it here explicitly.
     if (scop->getAliasGroups().size())
       Scop::incrementNumberOfAliasingAssumptions(1);
+    errs() << "buildAliasChecks done\n";
     return true;
   }
 
@@ -3244,6 +3327,7 @@ bool ScopBuilder::buildAliasChecks() {
 
   POLLY_DEBUG(dbgs() << "\n\nNOTE: Run time checks for " << scop->getNameStr()
                      << " could not be created. This SCoP has been dismissed.");
+  errs() << "buildAliasChecks done with error\n";
   return false;
 }
 
@@ -3303,20 +3387,56 @@ bool ScopBuilder::buildAliasGroups() {
 
   std::tie(AliasGroups, HasWriteAccess) = buildAliasGroupsForAccesses();
 
+  int Ind = 0;
+  for (AliasGroupTy &AGV : AliasGroups) {
+    errs() << "AliasGroupTy " << Ind << "\n";
+    for (auto *AG : AGV) {
+      errs() << "\t" << *AG->getAccessInstruction() << "\n";
+    }
+    errs() << "\n";
+    Ind++;
+  }
+
+  for (auto *Sai : HasWriteAccess) {
+    Sai->print(errs(), true);
+    errs() << "\n";
+  }
+
   splitAliasGroupsByDomain(AliasGroups);
 
+  Ind = 0;
+  for (AliasGroupTy &AGV : AliasGroups) {
+    errs() << "AliasGroupTy " << Ind << "\n";
+    for (auto *AG : AGV) {
+      errs() << "\t" << *AG->getAccessInstruction() << "\n";
+    }
+    errs() << "\n";
+    Ind++;
+  }
+
+  for (auto *Sai : HasWriteAccess) {
+    Sai->print(errs(), true);
+    errs() << "\n";
+  }
+
   for (AliasGroupTy &AG : AliasGroups) {
-    if (!scop->hasFeasibleRuntimeContext())
+    if (!scop->hasFeasibleRuntimeContext()) {
+      errs() << "buildAliasGroups failed because not "
+                "hasFeasibleRuntimeContext\n";
       return false;
+    }
 
     {
       IslMaxOperationsGuard MaxOpGuard(scop->getIslCtx().get(), OptComputeOut);
       bool Valid = buildAliasGroup(AG, HasWriteAccess);
-      if (!Valid)
+      if (!Valid) {
+        errs() << "buildAliasGroups failed because not buildAliasGroup\n";
         return false;
+      }
     }
     if (isl_ctx_last_error(scop->getIslCtx().get()) == isl_error_quota) {
       scop->invalidate(COMPLEXITY, DebugLoc());
+      errs() << "buildAliasGroups failed because isl_ctx_last_error\n";
       return false;
     }
   }
@@ -3348,8 +3468,8 @@ bool ScopBuilder::buildAliasGroup(
     }
   }
 
-  // If there are no read-only pointers, and less than two read-write pointers,
-  // no alias check is needed.
+  // If there are no read-only pointers, and less than two read-write
+  // pointers, no alias check is needed.
   if (ReadOnlyAccesses.empty() && ReadWriteArrays.size() <= 1)
     return true;
 
@@ -3363,6 +3483,9 @@ bool ScopBuilder::buildAliasGroup(
     if (!MA->isAffine()) {
       scop->invalidate(ALIASING, MA->getAccessInstruction()->getDebugLoc(),
                        MA->getAccessInstruction()->getParent());
+      errs() << "on sort car pas affine\n";
+      MA->print(errs());
+      errs() << "\n";
       return false;
     }
   }
@@ -3442,11 +3565,12 @@ static void verifyUse(Scop *S, Use &Op, LoopInfo &LI) {
 /// create MemoryAccesses. When done, the kind of scalar access should be the
 /// same no matter which way it was derived.
 ///
-/// The MemoryAccesses might be changed by later SCoP-modifying passes and hence
-/// can intentionally influence on the kind of uses (not corresponding to the
-/// "physical" anymore, hence called "virtual"). The CodeGenerator therefore has
-/// to pick up the virtual uses. But here in the code generator, this has not
-/// happened yet, such that virtual and physical uses are equivalent.
+/// The MemoryAccesses might be changed by later SCoP-modifying passes and
+/// hence can intentionally influence on the kind of uses (not corresponding
+/// to the "physical" anymore, hence called "virtual"). The CodeGenerator
+/// therefore has to pick up the virtual uses. But here in the code generator,
+/// this has not happened yet, such that virtual and physical uses are
+/// equivalent.
 static void verifyUses(Scop *S, LoopInfo &LI, DominatorTree &DT) {
   for (auto *BB : S->getRegion().blocks()) {
     for (auto &Inst : *BB) {
@@ -3470,9 +3594,9 @@ static void verifyUses(Scop *S, LoopInfo &LI, DominatorTree &DT) {
         continue;
 
       // For every value defined in the block, also check that a use of that
-      // value in the same statement would not be an inter-statement use. It can
-      // still be synthesizable or load-hoisted, but these kind of instructions
-      // are not directly copied in code-generation.
+      // value in the same statement would not be an inter-statement use. It
+      // can still be synthesizable or load-hoisted, but these kind of
+      // instructions are not directly copied in code-generation.
       auto VirtDef =
           VirtualUse::create(S, Stmt, Stmt->getSurroundingLoop(), &Inst, true);
       assert(VirtDef.getKind() == VirtualUse::Synthesizable ||
@@ -3498,15 +3622,23 @@ static void verifyUses(Scop *S, LoopInfo &LI, DominatorTree &DT) {
 #endif
 
 void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
+  llvm::errs() << "buildscop function run\n";
+  llvm::errs() << "region : " << R << "\n";
   scop.reset(new Scop(R, SE, LI, DT, *SD.getDetectionContext(&R), ORE,
                       SD.getNextID()));
+  llvm::errs() << "scop begin : " << *scop << "\n";
 
   buildStmts(R);
+
+  llvm::errs() << "scop after buildStmts : " << *scop << "\n";
 
   // Create all invariant load instructions first. These are categorized as
   // 'synthesizable', therefore are not part of any ScopStmt but need to be
   // created somewhere.
   const InvariantLoadsSetTy &RIL = scop->getRequiredInvariantLoads();
+  // for (auto &ILST : RIL) {
+  //   llvm::errs() << "scop->getRequiredInvariantLoads()" << *ILST << "\n";
+  // }
   for (BasicBlock *BB : scop->getRegion().blocks()) {
     if (SD.isErrorBlock(*BB, scop->getRegion()))
       continue;
@@ -3519,25 +3651,32 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       if (!RIL.count(Load))
         continue;
 
-      // Invariant loads require a MemoryAccess to be created in some statement.
-      // It is not important to which statement the MemoryAccess is added
-      // because it will later be removed from the ScopStmt again. We chose the
-      // first statement of the basic block the LoadInst is in.
+      // Invariant loads require a MemoryAccess to be created in some
+      // statement. It is not important to which statement the MemoryAccess is
+      // added because it will later be removed from the ScopStmt again. We
+      // chose the first statement of the basic block the LoadInst is in.
       ArrayRef<ScopStmt *> List = scop->getStmtListFor(BB);
       assert(!List.empty());
       ScopStmt *RILStmt = List.front();
       buildMemoryAccess(Load, RILStmt);
     }
   }
+
+  llvm::errs() << "scop after build memory access for invariant load: " << *scop
+               << "\n";
+
   buildAccessFunctions();
+
+  llvm::errs() << "scop after buildAccessFunctions : " << *scop << "\n";
 
   // In case the region does not have an exiting block we will later (during
   // code generation) split the exit block. This will move potential PHI nodes
   // from the current exit block into the new region exiting block. Hence, PHI
   // nodes that are at this point not part of the region will be.
-  // To handle these PHI nodes later we will now model their operands as scalar
-  // accesses. Note that we do not model anything in the exit block if we have
-  // an exiting block in the region, as there will not be any splitting later.
+  // To handle these PHI nodes later we will now model their operands as
+  // scalar accesses. Note that we do not model anything in the exit block if
+  // we have an exiting block in the region, as there will not be any
+  // splitting later.
   if (!R.isTopLevelRegion() && !scop->hasSingleExitEdge()) {
     for (Instruction &Inst : *R.getExit()) {
       PHINode *PHI = dyn_cast<PHINode>(&Inst);
@@ -3548,17 +3687,26 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     }
   }
 
+  llvm::errs() << "scop after buildPHIAccesses : " << *scop << "\n";
+
   // Create memory accesses for global reads since all arrays are now known.
   auto *AF = SE.getConstant(IntegerType::getInt64Ty(SE.getContext()), 0);
   for (auto GlobalReadPair : GlobalReads) {
     ScopStmt *GlobalReadStmt = GlobalReadPair.first;
     Instruction *GlobalRead = GlobalReadPair.second;
+    llvm::errs() << "statements " << GlobalReadStmt << "     read "
+                 << *GlobalRead << "\n";
     for (auto *BP : ArrayBasePointers)
       addArrayAccess(GlobalReadStmt, MemAccInst(GlobalRead), MemoryAccess::READ,
                      BP, BP->getType(), false, {AF}, {nullptr}, GlobalRead);
   }
 
+  llvm::errs() << "scop after adddArrayAccess : " << *scop << "\n";
+
   buildInvariantEquivalenceClasses();
+
+  llvm::errs() << "scop after buildInvariantEquivalenceClasses : " << *scop
+               << "\n";
 
   /// A map from basic blocks to their invalid domains.
   DenseMap<BasicBlock *, isl::set> InvalidDomainMap;
@@ -3566,8 +3714,11 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   if (!buildDomains(&R, InvalidDomainMap)) {
     POLLY_DEBUG(
         dbgs() << "Bailing-out because buildDomains encountered problems\n");
+    llvm::errs() << "buildscop function done (not buildDomains)\n";
     return;
   }
+
+  llvm::errs() << "scop after buildDomains : " << *scop << "\n";
 
   addUserAssumptions(AC, InvalidDomainMap);
 
@@ -3579,14 +3730,19 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       Stmt.setInvalidDomain(InvalidDomainMap[getRegionNodeBasicBlock(
           Stmt.getRegion()->getNode())]);
 
+  llvm::errs() << "scop before removeEmpty : " << *scop << "\n";
   // Remove empty statements.
   // Exit early in case there are no executable statements left in this scop.
   scop->removeStmtNotInDomainMap();
+  llvm::errs() << "scop between removeEmpty : " << *scop << "\n";
   scop->simplifySCoP(false);
   if (scop->isEmpty()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because SCoP is empty\n");
+    llvm::errs() << "buildscop function done (scop is empty)\n";
     return;
   }
+
+  llvm::errs() << "scop after simplify : " << *scop << "\n";
 
   // The ScopStmts now have enough information to initialize themselves.
   for (ScopStmt &Stmt : *scop) {
@@ -3599,10 +3755,14 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       checkForReductions(Stmt);
   }
 
+  llvm::errs() << "scop after all : " << *scop << "\n";
+
   // Check early for a feasible runtime context.
   if (!scop->hasFeasibleRuntimeContext()) {
     POLLY_DEBUG(
         dbgs() << "Bailing-out because of unfeasible context (early)\n");
+    llvm::errs()
+        << "buildscop function done (scop has not FeasibleRuntimeContext)\n";
     return;
   }
 
@@ -3612,12 +3772,17 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     scop->invalidate(PROFITABLE, DebugLoc());
     POLLY_DEBUG(
         dbgs() << "Bailing-out because SCoP is not considered profitable\n");
+    llvm::errs() << "buildscop function done (scop isn't profitable)\n";
     return;
   }
 
   buildSchedule();
 
+  llvm::errs() << "scop after buildSchedule : " << *scop << "\n";
+
   finalizeAccesses();
+
+  llvm::errs() << "scop after finalizeAccesses : " << *scop << "\n";
 
   scop->realignParams();
   addUserContext();
@@ -3630,8 +3795,11 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   scop->simplifyContexts();
   if (!buildAliasChecks()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because could not build alias checks\n");
+    llvm::errs() << "buildscop function done (not buildAliasChecks)\n";
     return;
   }
+
+  llvm::errs() << "scop after buildAliasChecks : " << *scop << "\n";
 
   hoistInvariantLoads();
   canonicalizeDynamicBasePtrs();
@@ -3642,12 +3810,16 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   // change.
   if (!scop->hasFeasibleRuntimeContext()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because of unfeasible context (late)\n");
+    llvm::errs()
+        << "buildscop function done (scop not has FeasibleRuntimeContext)\n";
     return;
   }
 
 #ifndef NDEBUG
   verifyUses(scop.get(), LI, DT);
 #endif
+
+  llvm::errs() << "buildscop function done\n";
 }
 
 ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
@@ -3665,6 +3837,11 @@ ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
 
   buildScop(*R, AC);
 
+  if (scop)
+    llvm::errs() << "BuildScop success\n";
+  else
+    llvm::errs() << "BuildScop fail\n";
+
   POLLY_DEBUG(dbgs() << *scop);
 
   if (!scop->hasFeasibleRuntimeContext()) {
@@ -3673,6 +3850,7 @@ ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
     POLLY_DEBUG(dbgs() << "SCoP detected but dismissed\n");
     RecordedAssumptions.clear();
     scop.reset();
+    llvm::errs() << "scop hasn't feasible Runtime Context\n";
   } else {
     Msg = "SCoP ends here.";
     ++ScopFound;

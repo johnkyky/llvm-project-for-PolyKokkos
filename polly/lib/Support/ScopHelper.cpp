@@ -612,10 +612,16 @@ bool polly::canSynthesize(const Value *V, const Scop &S, ScalarEvolution *SE,
 
   const InvariantLoadsSetTy &ILS = S.getRequiredInvariantLoads();
   if (const SCEV *Scev = SE->getSCEVAtScope(const_cast<Value *>(V), Scope))
-    if (!isa<SCEVCouldNotCompute>(Scev))
-      if (!hasScalarDepsInsideRegion(Scev, &S.getRegion(), Scope, false, ILS))
+    if (!isa<SCEVCouldNotCompute>(Scev)) {
+      // llvm::errs() << "instruction " << *V << "     SCEV : " << *Scev <<
+      // "\n"; for (const auto *Op : Scev->operands()) {
+      //   llvm::errs() << "\t\top " << *Op << "\n";
+      // }
+      if (!hasScalarDepsInsideRegion(Scev, &S.getRegion(), Scope, false, ILS)) {
+        // llvm::errs() << "\t!hasScalarDepsInsideRegion == true\n";
         return true;
-
+      }
+    }
   return false;
 }
 
@@ -781,8 +787,8 @@ isl::id polly::getIslLoopAttr(isl::ctx Ctx, BandAttr *Attr) {
   assert(Attr && "Must be a valid BandAttr");
 
   // The name "Loop" signals that this id contains a pointer to a BandAttr.
-  // The ScheduleOptimizer also uses the string "Inter iteration alias-free" in
-  // markers, but it's user pointer is an llvm::Value.
+  // The ScheduleOptimizer also uses the string "Inter iteration alias-free"
+  // in markers, but it's user pointer is an llvm::Value.
   isl::id Result = isl::id::alloc(Ctx, "Loop with Metadata", Attr);
   Result = isl::manage(isl_id_set_free_user(Result.release(), [](void *Ptr) {
     BandAttr *Attr = reinterpret_cast<BandAttr *>(Ptr);

@@ -484,7 +484,10 @@ public:
 
   bool follow(const SCEV *S) {
     if (auto Unknown = dyn_cast<SCEVUnknown>(S)) {
+      // Value *Val = Unknown->getValue();
+      // errs() << "Value: " << *Val << "\n";
       Instruction *Inst = dyn_cast<Instruction>(Unknown->getValue());
+      // llvm::errs() << "\t\tSCEVUnknown !!\n";
 
       if (Inst) {
         // When we invariant load hoist a load, we first make sure that there
@@ -496,19 +499,24 @@ public:
         // are strictly not necessary by tracking the invariant load as a
         // scalar.
         LoadInst *LI = dyn_cast<LoadInst>(Inst);
-        if (LI && ILS.contains(LI))
+        if (LI && ILS.contains(LI)) {
+          // llvm::errs() << "\t\t\ton follow back " << *LI << "\n";
           return false;
+        }
       }
 
       // Return true when Inst is defined inside the region R.
-      if (!Inst || !R->contains(Inst))
+      if (!Inst || !R->contains(Inst)) {
+        // llvm::errs() << "\t\t\tsortie d'urgence\n";
         return true;
+      }
 
       HasInRegionDeps = true;
       return false;
     }
 
     if (auto AddRec = dyn_cast<SCEVAddRecExpr>(S)) {
+      // llvm::errs() << "\t\tSCEVAddRecExpr !!\n";
       if (AllowLoops)
         return true;
 

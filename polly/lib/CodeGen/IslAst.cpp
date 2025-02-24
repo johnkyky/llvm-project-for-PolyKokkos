@@ -35,6 +35,7 @@
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
 #include "polly/Support/GICHelper.h"
+#include "polly/Support/ISLOStream.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
@@ -548,6 +549,9 @@ void IslAst::init(const Dependences &D) {
   walkAstForStatistics(Root);
 
   isl_ast_build_free(Build);
+
+  errs() << "schedule : " << ScheduleTree << "\n";
+  errs() << "ast : " << Root << "\n";
 }
 
 IslAst IslAst::create(Scop &Scop, const Dependences &D) {

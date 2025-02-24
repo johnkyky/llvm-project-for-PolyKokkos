@@ -41,8 +41,27 @@ AnalysisFunctionPrinterPassTest::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::all();
 }
 
+void printFunction(int Depth, const Function *F) {
+  if (F == nullptr or F->isDeclaration()) {
+    return;
+  }
+
+  for (int I = 0; I < Depth; I++)
+    llvm::errs() << "\t";
+  llvm::errs() << "visit " << F->getName() << "\n";
+
+  for (auto &BB : *F) {
+    for (auto &I : BB) {
+      if (auto *CB = dyn_cast<CallBase>(&I)) {
+        printFunction(Depth + 1, CB->getCalledFunction());
+      }
+    }
+  }
+}
+
 PreservedAnalyses FunctionPassTest::run(Function &F,
                                         FunctionAnalysisManager &AM) {
-  std::cout << F.getName().str() << std::endl;
+  std::cout << "FunctionPassTest : " << F.getName().str() << std::endl;
+
   return PreservedAnalyses::all();
 }

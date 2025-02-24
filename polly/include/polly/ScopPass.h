@@ -221,6 +221,7 @@ struct FunctionToScopPassAdaptor final
   explicit FunctionToScopPassAdaptor(ScopPassT Pass) : Pass(std::move(Pass)) {}
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    llvm::errs() << "FunctionToScopPassAdaptor run on " << F.getName() << "\n";
     ScopDetection &SD = AM.getResult<ScopAnalysis>(F);
     ScopInfo &SI = AM.getResult<ScopInfoAnalysis>(F);
     if (SI.empty()) {
@@ -232,6 +233,7 @@ struct FunctionToScopPassAdaptor final
       PA.abandon<ScopInfoAnalysis>();
       PA.abandon<ScopAnalysis>();
       AM.invalidate(F, PA);
+      llvm::errs() << "FunctionToScopPassAdaptor done because no scops\n\n\n";
       return PreservedAnalyses::all();
     }
 
@@ -239,6 +241,10 @@ struct FunctionToScopPassAdaptor final
     for (auto &S : SI)
       if (S.second)
         Worklist.insert(S.first);
+
+    if (Worklist.empty()) {
+      llvm::errs() << "Worklist empty\n";
+    }
 
     ScopStandardAnalysisResults AR = {AM.getResult<DominatorTreeAnalysis>(F),
                                       AM.getResult<ScopInfoAnalysis>(F),
@@ -254,6 +260,8 @@ struct FunctionToScopPassAdaptor final
 
     while (!Worklist.empty()) {
       Region *R = Worklist.pop_back_val();
+      llvm::errs() << "Worklist caca " << *R << "\n";
+      llvm::errs() << "\t" << R->getNameStr() << "\n";
       if (!SD.isMaxRegionInScop(*R, /*Verify=*/false))
         continue;
       Scop *scop = SI.getScop(R);
@@ -264,8 +272,10 @@ struct FunctionToScopPassAdaptor final
       PreservedAnalyses PassPA = Pass.run(*scop, SAM, AR, Updater);
 
       SAM.invalidate(*scop, PassPA);
-      if (Updater.invalidateCurrentScop())
+      if (Updater.invalidateCurrentScop()) {
+        llvm::errs() << "on recompute parce qu'on a compute un scop\n";
         SI.recompute();
+      }
     };
 
     // FIXME: For the same reason as we add a BarrierNoopPass in the legacy pass
@@ -275,6 +285,7 @@ struct FunctionToScopPassAdaptor final
     // invalidated), it is not sufficient for other purposes. For instance,
     // CodeGeneration does not inform LoopInfo about new loops in the
     // Polly-generated IR.
+    llvm::errs() << "FunctionToScopPassAdaptor done\n\n\n";
     return PreservedAnalyses::none();
   }
 

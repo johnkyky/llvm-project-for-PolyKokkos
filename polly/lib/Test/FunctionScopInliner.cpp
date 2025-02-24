@@ -14,6 +14,7 @@
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -28,7 +29,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "inline"
 
-PreservedAnalyses impl1(Function &F, FunctionAnalysisManager &AM) {
+PreservedAnalyses funcCallScopInlinerImpl(Function &F,
+                                          FunctionAnalysisManager &AM) {
   ScopDetection &SD = AM.getResult<ScopAnalysis>(F);
   ScopInfo &SI = AM.getResult<ScopInfoAnalysis>(F);
   (void)SD;
@@ -61,7 +63,7 @@ PreservedAnalyses impl1(Function &F, FunctionAnalysisManager &AM) {
     return PreservedAnalyses::none();
   }
 
-  F.dump();
+  /*F.dump();*/
 
   for (User *U : F.users()) {
     if (auto *CB = dyn_cast<CallBase>(U)) {
@@ -70,18 +72,9 @@ PreservedAnalyses impl1(Function &F, FunctionAnalysisManager &AM) {
       ScopInfo &TSI = AM.getResult<ScopInfoAnalysis>(*Caller);
       (void)TSD;
       (void)TSI;
-      CB->dump();
+      llvm::errs() << CB << "\n";
       if (CB->getCalledFunction() == &F) {
         llvm::errs() << "CB->getCalledFunction() == &F" << "\n";
-      }
-      if (CB->hasFnAttr(Attribute::AlwaysInline)) {
-        llvm::errs() << "always_inline" << "\n";
-      }
-      if (not CB->getAttributes().hasFnAttr(Attribute::NoInline)) {
-        llvm::errs() << "not noinline" << "\n";
-      }
-      if (CB->getMetadata("cppoly.inline") != nullptr) {
-        llvm::errs() << "cppoly inline" << "\n";
       }
       if (CB->getMetadata("cppoly.inline") != nullptr) {
         llvm::errs() << "CB->getMetadata(\"cppoly.inline\") != nullptr" << "\n";
@@ -172,6 +165,12 @@ PreservedAnalyses impl1(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses FuncCallScopInliner::run(Function &F,
                                            FunctionAnalysisManager &AM) {
+  if (F.getMetadata("polly") == nullptr or
+      not(F.hasFnAttribute("polly.findSCoP"))) {
+    llvm::errs() << "Not findSCoP for " << F.getName() << "\n";
+    return PreservedAnalyses::all();
+  }
   llvm::errs() << "Running Inliner on function: " << F.getName() << "\n";
-  return impl1(F, AM);
+  // F.dump();
+  return funcCallScopInlinerImpl(F, AM);
 }

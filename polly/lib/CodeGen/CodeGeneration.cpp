@@ -28,6 +28,7 @@
 #include "polly/LinkAllPasses.h"
 #include "polly/Options.h"
 #include "polly/ScopInfo.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/ScopHelper.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -185,13 +186,16 @@ static bool generateCode(Scop &S, IslAstInfo &AI, LoopInfo &LI,
   IslAst &Ast = AI.getIslAst();
   if (Ast.getSharedIslCtx() != S.getSharedIslCtx()) {
     POLLY_DEBUG(dbgs() << "Got an IstAst for a different Scop/isl_ctx\n");
+    errs() << "generateCode Got an IstAst for a different Scop/isl_ctx\n";
     return false;
   }
 
   // Check if we created an isl_ast root node, otherwise exit.
   isl::ast_node AstRoot = Ast.getAst();
-  if (AstRoot.is_null())
+  if (AstRoot.is_null()) {
+    errs() << "generateCode AstRoot is null\n";
     return false;
+  }
 
   // Collect statistics. Do it before we modify the IR to avoid having it any
   // influence on the result.
@@ -360,8 +364,11 @@ PreservedAnalyses CodeGenerationPass::run(Scop &S, ScopAnalysisManager &SAM,
   auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
   if (generateCode(S, AI, AR.LI, AR.DT, AR.SE, AR.RI)) {
     U.invalidateScop(S);
+    errs() << "la génération c'est bien passé\n";
     return PreservedAnalyses::none();
   }
+
+  errs() << "la génération c'est mal passé\n";
 
   return PreservedAnalyses::all();
 }

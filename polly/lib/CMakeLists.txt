@@ -92,6 +92,7 @@ add_llvm_pass_plugin(Polly
   Test/ModulePassTest.cpp
   Test/MarkFunctionToFindScop.cpp
   Test/FunctionScopInliner.cpp
+  Test/FunctionMarkedInliner.cpp
 
   ${POLLY_HEADER_FILES}
 

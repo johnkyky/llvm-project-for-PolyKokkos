@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ModulePassTest.h"
+#include "llvm/IR/Constants.h"
 #include <iostream>
 
 using namespace polly;
@@ -41,6 +42,10 @@ AnalysisModulePrinterPassTest::run(Module &M, ModuleAnalysisManager &AM) {
 }
 
 PreservedAnalyses ModulePassTest::run(Module &M, ModuleAnalysisManager &AM) {
-  std::cout << M.getName().str() << std::endl;
+  llvm::errs() << "ModulePassTest run on " << M.getName() << "\n";
+
+  llvm::errs() << M << "\n";
+
+  llvm::errs() << "ModulePassTest done\n";
   return PreservedAnalyses::all();
 }
