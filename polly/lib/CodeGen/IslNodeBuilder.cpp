@@ -672,8 +672,10 @@ void IslNodeBuilder::createForParallel(__isl_take isl_ast_node *For) {
 void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
   if (IslAstInfo::isExecutedInParallel(isl::manage_copy(For))) {
     createForParallel(For);
+    llvm::errs() << "c'est une boucle parallel caca\n";
     return;
   }
+  llvm::errs() << "c'est une boucle pas parallel caca\n";
   bool Parallel = (IslAstInfo::isParallel(isl::manage_copy(For)) &&
                    !IslAstInfo::isReductionParallel(isl::manage_copy(For)));
   createForSequential(isl::manage(For).as<isl::ast_node_for>(), Parallel);
