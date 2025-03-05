@@ -2731,6 +2731,8 @@ ScopInfo::ScopInfo(const DataLayout &DL, ScopDetection &SD, ScalarEvolution &SE,
   llvm::errs() << "nombre de valid region juste avant de recompute "
                << std::distance(SD.begin(), SD.end()) << "\n";
   recompute();
+  llvm::errs() << "nombre de valid region juste apres de recompute "
+               << std::distance(SD.begin(), SD.end()) << "\n";
 }
 
 void ScopInfo::recompute() {

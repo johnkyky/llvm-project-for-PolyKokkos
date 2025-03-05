@@ -242,10 +242,6 @@ struct FunctionToScopPassAdaptor final
       if (S.second)
         Worklist.insert(S.first);
 
-    if (Worklist.empty()) {
-      llvm::errs() << "Worklist empty\n";
-    }
-
     ScopStandardAnalysisResults AR = {AM.getResult<DominatorTreeAnalysis>(F),
                                       AM.getResult<ScopInfoAnalysis>(F),
                                       AM.getResult<ScalarEvolutionAnalysis>(F),
@@ -260,8 +256,7 @@ struct FunctionToScopPassAdaptor final
 
     while (!Worklist.empty()) {
       Region *R = Worklist.pop_back_val();
-      llvm::errs() << "Worklist caca " << *R << "\n";
-      llvm::errs() << "\t" << R->getNameStr() << "\n";
+      llvm::errs() << "Worklist " << *R << "\n";
       if (!SD.isMaxRegionInScop(*R, /*Verify=*/false))
         continue;
       Scop *scop = SI.getScop(R);
@@ -273,7 +268,7 @@ struct FunctionToScopPassAdaptor final
 
       SAM.invalidate(*scop, PassPA);
       if (Updater.invalidateCurrentScop()) {
-        llvm::errs() << "on recompute parce qu'on a compute un scop\n";
+        llvm::errs() << "on recompute parce que pass change code\n";
         SI.recompute();
       }
     };

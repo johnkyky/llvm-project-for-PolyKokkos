@@ -1671,13 +1671,12 @@ void ScopDetection::findScops(Region &R) {
   }
 
   if (Context.IsInvalid) {
-    llvm::errs() << "Invalid Region\n"
-                 << R.getNameStr() << " because "
+    llvm::errs() << "Invalid Region " << R.getNameStr() << " because "
                  << this->regionIsInvalidBecause(&R) << "\n";
     removeCachedResults(R);
   } else {
     ValidRegions.insert(&R);
-    llvm::errs() << "Valid Region\n" << R.getNameStr() << "\n";
+    llvm::errs() << "Valid Region  " << R.getNameStr() << "\n";
     return;
   }
 
