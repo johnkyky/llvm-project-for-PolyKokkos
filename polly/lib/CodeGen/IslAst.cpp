@@ -600,6 +600,12 @@ bool IslAstInfo::isReductionParallel(const isl::ast_node &Node) {
 }
 
 bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
+  errs() << Node << "\n";
+  errs() << "isExecutedInParallel " << "\tPollyParallel " << PollyParallel
+         << "\tPollyParallelForce " << PollyParallelForce
+         << "\tisInnermost(Node) " << isInnermost(Node)
+         << "\tisOutermostParallel(Node) " << isOutermostParallel(Node)
+         << "\tisReductionParallel(Node) " << isReductionParallel(Node) << "\n";
   if (!PollyParallel)
     return false;
 
@@ -612,7 +618,8 @@ bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
   //       executed. This can possibly require run-time checks, which again
   //       raises the question of both run-time check overhead and code size
   //       costs.
-  if (!PollyParallelForce && isInnermost(Node))
+  if (!PollyParallelForce &&
+      (isInnermost(Node) and not isOutermostParallel(Node)))
     return false;
 
   return isOutermostParallel(Node) && !isReductionParallel(Node);
