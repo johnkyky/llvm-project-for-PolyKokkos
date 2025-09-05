@@ -17,6 +17,7 @@ MODULE_PASS("print<polly-analysis-module-test>", AnalysisModulePrinterPassTest(l
 #define FUNCTION_ANALYSIS(NAME, CREATE_PASS)
 #endif
 FUNCTION_ANALYSIS("polly-detect", ScopAnalysis())
+FUNCTION_ANALYSIS("polly-annoted-array", ExtractAnnotatedSizes())
 FUNCTION_ANALYSIS("polly-function-scops", ScopInfoAnalysis())
 FUNCTION_ANALYSIS("polly-analysis", ScopInfoAnalysis())
 FUNCTION_ANALYSIS("polly-analysis-function-test", AnalysisFunctionTest())
