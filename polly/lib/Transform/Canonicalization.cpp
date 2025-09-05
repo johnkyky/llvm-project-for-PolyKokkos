@@ -200,11 +200,7 @@ INITIALIZE_PASS_END(PollyCanonicalize, "polly-canonicalize",
 
 PreservedAnalyses PollyCanonicalizeRewrite::run(Function &F,
                                                 FunctionAnalysisManager &AM) {
-  llvm::errs() << "polly-canonicalize-rewrite\n";
-
-  // TODO: Use the fonction used in the pipeline
   llvm::FunctionPassManager FPM = registerCanonicalicationPassesNPM();
   FPM.run(F, AM);
-
   return PreservedAnalyses::none();
 }
