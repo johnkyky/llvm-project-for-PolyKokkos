@@ -25,6 +25,9 @@ class GetElementPtrInst;
 class ScalarEvolution;
 class SCEV;
 
+bool developSCEVMulExpr(ScalarEvolution &SE, const SCEV *Expr,
+                        SmallVectorImpl<const SCEV *> &Out);
+
 /// Compute the array dimensions Sizes from the set of Terms extracted from
 /// the memory access function of this SCEVAddRecExpr (second step of
 /// delinearization).

@@ -53,8 +53,13 @@ struct SCEVCollectStrides {
       : SE(SE), Strides(S) {}
 
   bool follow(const SCEV *S) {
-    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S))
+    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
       Strides.push_back(AR->getStepRecurrence(SE));
+      const SCEVAddRecExpr *Start = dyn_cast<SCEVAddRecExpr>(AR->getStart());
+      if (not Start) {
+        Strides.push_back(AR->getStart());
+      }
+    }
     return true;
   }
 
@@ -63,15 +68,24 @@ struct SCEVCollectStrides {
 
 // Collect all SCEVUnknown and SCEVMulExpr expressions.
 struct SCEVCollectTerms {
+  ScalarEvolution &SE;
   SmallVectorImpl<const SCEV *> &Terms;
 
-  SCEVCollectTerms(SmallVectorImpl<const SCEV *> &T) : Terms(T) {}
+  SCEVCollectTerms(ScalarEvolution &SE, SmallVectorImpl<const SCEV *> &T)
+      : SE(SE), Terms(T) {}
 
   bool follow(const SCEV *S) {
     if (isa<SCEVUnknown>(S) || isa<SCEVMulExpr>(S) ||
         isa<SCEVSignExtendExpr>(S)) {
-      if (!containsUndefs(S))
-        Terms.push_back(S);
+      if (!containsUndefs(S)) {
+        SmallVector<const SCEV *, 8> AddTerms;
+        bool IsDevelopped = developSCEVMulExpr(SE, S, AddTerms);
+        if (IsDevelopped) {
+          for (const auto *Op : AddTerms)
+            Terms.push_back(Op);
+        } else
+          Terms.push_back(S);
+      }
 
       // Stop recursion: once we collected a term, do not walk its operands.
       return false;
@@ -181,7 +195,7 @@ void llvm::collectParametricTerms(ScalarEvolution &SE, const SCEV *Expr,
   });
 
   for (const SCEV *S : Strides) {
-    SCEVCollectTerms TermCollector(Terms);
+    SCEVCollectTerms TermCollector(SE, Terms);
     visitAll(S, TermCollector);
   }
 
@@ -190,6 +204,22 @@ void llvm::collectParametricTerms(ScalarEvolution &SE, const SCEV *Expr,
     for (const SCEV *T : Terms)
       dbgs() << *T << "\n";
   });
+
+  const auto *NewEnd =
+      std::remove_if(Terms.begin(), Terms.end(), [](const SCEV *S) {
+        for (const auto *Op : S->operands()) {
+          if (const auto *Unknown = dyn_cast<SCEVUnknown>(Op)) {
+            if (const auto *Instr =
+                    dyn_cast<Instruction>(Unknown->getValue())) {
+              if (Instr->hasMetadata("loop_bound_information")) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      });
+  Terms.erase(NewEnd, Terms.end());
 
   SCEVCollectAddRecMultiplies MulCollector(Terms, SE);
   visitAll(Expr, MulCollector);
@@ -274,12 +304,57 @@ static const SCEV *removeConstantFactors(ScalarEvolution &SE, const SCEV *T) {
   return T;
 }
 
+bool llvm::developSCEVMulExpr(ScalarEvolution &SE, const SCEV *Expr,
+                              SmallVectorImpl<const SCEV *> &Out) {
+  if (!Expr)
+    return false;
+
+  auto *Mul = dyn_cast<SCEVMulExpr>(Expr);
+  if (!Mul)
+    return false;
+
+  SmallVector<SmallVector<const SCEV *, 4>, 4> ExpandedOperands;
+
+  for (const SCEV *Op : Mul->operands()) {
+    if (const auto *Add = dyn_cast<SCEVAddExpr>(Op)) {
+      SmallVector<const SCEV *, 4> Terms;
+      for (const SCEV *SubOp : Add->operands())
+        Terms.push_back(SubOp);
+      ExpandedOperands.push_back(Terms);
+    } else {
+      ExpandedOperands.push_back({Op});
+    }
+  }
+
+  for (const auto *Op : ExpandedOperands.back()) {
+    Out.push_back(Op);
+  }
+  ExpandedOperands.pop_back();
+
+  while (not ExpandedOperands.empty()) {
+    auto Ops = ExpandedOperands.back();
+    ExpandedOperands.pop_back();
+
+    SmallVector<const SCEV *, 8> Tmp;
+    for (const auto *OpNew : Ops) {
+      for (const auto *OpOld : Out) {
+        Tmp.push_back(SE.getMulExpr(OpNew, OpOld));
+      }
+    }
+    std::swap(Tmp, Out);
+  }
+
+  return true;
+}
+
 void llvm::findArrayDimensions(ScalarEvolution &SE,
                                SmallVectorImpl<const SCEV *> &Terms,
                                SmallVectorImpl<const SCEV *> &Sizes,
                                const SCEV *ElementSize) {
-  if (Terms.size() < 1 || !ElementSize)
+  if (Terms.size() < 1 || !ElementSize) {
+    Sizes.push_back(ElementSize);
     return;
+  }
 
   // Early return when Terms do not contain parameters: we do not delinearize
   // non parametric SCEVs.
