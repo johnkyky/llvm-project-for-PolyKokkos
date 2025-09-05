@@ -1275,6 +1275,8 @@ public:
   /// @return The iteration domain of this ScopStmt.
   isl::set getDomain() const;
 
+  void setDomain(isl::set Domain);
+
   /// Get the space of the iteration domain
   ///
   /// @return The space of the iteration domain

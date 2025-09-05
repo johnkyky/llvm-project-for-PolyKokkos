@@ -93,6 +93,10 @@ add_llvm_pass_plugin(Polly
   Test/MarkFunctionToFindScop.cpp
   Test/FunctionScopInliner.cpp
   Test/FunctionMarkedInliner.cpp
+  Test/ExtractAnnotatedFromLoop.cpp
+  Test/LoopFusion.cpp
+  Test/OpenSCoPExporter.cpp
+  Test/ScheduleOptimizer.cpp
 
   ${POLLY_HEADER_FILES}
 
@@ -116,7 +120,7 @@ endif()
 # LLVM_POLLY_LINK_INTO_TOOLS=ON, its dependencies like PollyISL are linked as
 # well.
 target_link_libraries(Polly PUBLIC
-  ${ISL_TARGET}
+  ${ISL_TARGET} osl
 )
 
 # Create a loadable module Polly.so that can be loaded using

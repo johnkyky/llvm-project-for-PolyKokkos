@@ -151,7 +151,7 @@ PreservedAnalyses MarkFunctionToFindScop::run(Module &M,
   for (auto &F : M) {
     if (F.getName().str() == "main") {
       // markFunctionWithPragma(0, &F, false);
-      test(&F);
+      // test(&F);
     }
   }
 

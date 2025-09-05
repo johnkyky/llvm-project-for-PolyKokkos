@@ -48,6 +48,7 @@
 
 #include "polly/ScopDetectionDiagnostic.h"
 #include "polly/Support/ScopHelper.h"
+#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AliasSetTracker.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -210,6 +211,7 @@ private:
   LoopInfo &LI;
   RegionInfo &RI;
   AAResults &AA;
+  AnnotationData &AnnotedSizes;
   //@}
 
   /// Map to remember detection contexts for all regions.
@@ -290,6 +292,8 @@ private:
   ///        derived for this array.
   bool hasBaseAffineAccesses(DetectionContext &Context,
                              const SCEVUnknown *BasePointer, Loop *Scope) const;
+
+  bool tryToDelinearize(DetectionContext &Context) const;
 
   /// Delinearize all non affine memory accesses and return false when there
   /// exists a non affine memory access that cannot be delinearized. Return true
@@ -509,7 +513,8 @@ private:
 
 public:
   ScopDetection(const DominatorTree &DT, ScalarEvolution &SE, LoopInfo &LI,
-                RegionInfo &RI, AAResults &AA, OptimizationRemarkEmitter &ORE);
+                RegionInfo &RI, AAResults &AA, AnnotationData &AnnotedSizes,
+                OptimizationRemarkEmitter &ORE);
 
   void detect(Function &F);
 

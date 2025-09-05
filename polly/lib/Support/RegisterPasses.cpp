@@ -39,11 +39,15 @@
 #include "polly/Simplify.h"
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
+#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/FunctionMarkedInliner.h"
 #include "polly/Test/FunctionPassTest.h"
 #include "polly/Test/FunctionScopInliner.h"
+#include "polly/Test/LoopFusion.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
+#include "polly/Test/OpenSCoPExporter.h"
+#include "polly/Test/ScheduleOptimizer.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
@@ -82,7 +86,7 @@ static cl::opt<bool> PollyDetectOnly(
 
 enum PassPositionChoice { POSITION_EARLY, POSITION_BEFORE_VECTORIZER };
 
-enum OptimizerChoice { OPTIMIZER_NONE, OPTIMIZER_ISL };
+enum OptimizerChoice { OPTIMIZER_NONE, OPTIMIZER_ISL, OPTIMIZER_PLUTO };
 
 static cl::opt<PassPositionChoice> PassPosition(
     "polly-position", cl::desc("Where to run polly in the pass pipeline"),
@@ -91,12 +95,12 @@ static cl::opt<PassPositionChoice> PassPosition(
                           "Right before the vectorizer")),
     cl::Hidden, cl::init(POSITION_BEFORE_VECTORIZER), cl::cat(PollyCategory));
 
-static cl::opt<OptimizerChoice>
-    Optimizer("polly-optimizer", cl::desc("Select the scheduling optimizer"),
-              cl::values(clEnumValN(OPTIMIZER_NONE, "none", "No optimizer"),
-                         clEnumValN(OPTIMIZER_ISL, "isl",
-                                    "The isl scheduling optimizer")),
-              cl::Hidden, cl::init(OPTIMIZER_ISL), cl::cat(PollyCategory));
+static cl::opt<OptimizerChoice> Optimizer(
+    "polly-optimizer", cl::desc("Select the scheduling optimizer"),
+    cl::values(clEnumValN(OPTIMIZER_NONE, "none", "No optimizer"),
+               clEnumValN(OPTIMIZER_ISL, "isl", "The isl scheduling optimizer"),
+               clEnumValN(OPTIMIZER_PLUTO, "pluto", "The pluto optimizer")),
+    cl::Hidden, cl::init(OPTIMIZER_ISL), cl::cat(PollyCategory));
 
 enum CodeGenChoice { CODEGEN_FULL, CODEGEN_AST, CODEGEN_NONE };
 static cl::opt<CodeGenChoice> CodeGeneration(
@@ -313,7 +317,12 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
   PM.addPass(CodePreparationPass());
+  PM.addPass(ExtractAnnotatedFromLoop());
+  PM.addPass(llvm::DCEPass());
+  PM.addPass(LoopFusionPass());
+  // PM.addPass(llvm::DCEPass());
   // PM.addPass(FunctionPassTest());
+
   PassBuilder PB;
   ScopPassManager SPM;
 
@@ -361,6 +370,9 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   case OPTIMIZER_ISL:
     SPM.addPass(IslScheduleOptimizerPass());
     break;
+  case OPTIMIZER_PLUTO:
+    SPM.addPass(PlutoScheduleOptimizerPass());
+    break;
   }
 
   if (ExportJScop)
@@ -384,7 +396,6 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   }
 
   PM.addPass(createFunctionToScopPassAdaptor(std::move(SPM)));
-  // PM.addPass(ScopPrinter("scops_after"));
   PM.addPass(PB.buildFunctionSimplificationPipeline(
       Level, llvm::ThinOrFullLTOPhase::None)); // Cleanup
 

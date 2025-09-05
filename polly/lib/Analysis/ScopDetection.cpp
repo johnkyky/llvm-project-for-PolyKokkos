@@ -50,6 +50,7 @@
 #include "polly/Support/SCEVValidator.h"
 #include "polly/Support/ScopHelper.h"
 #include "polly/Support/ScopLocation.h"
+#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -344,8 +345,10 @@ static bool doesStringMatchAnyRegex(StringRef Str,
 
 ScopDetection::ScopDetection(const DominatorTree &DT, ScalarEvolution &SE,
                              LoopInfo &LI, RegionInfo &RI, AAResults &AA,
+                             AnnotationData &AnnotedSizes,
                              OptimizationRemarkEmitter &ORE)
-    : DT(DT), SE(SE), LI(LI), RI(RI), AA(AA), ORE(ORE) {}
+    : DT(DT), SE(SE), LI(LI), RI(RI), AA(AA), AnnotedSizes(AnnotedSizes),
+      ORE(ORE) {}
 
 void ScopDetection::detect(Function &F) {
   assert(ValidRegions.empty() && "Detection must run only once");
@@ -903,6 +906,28 @@ ScopDetection::getDelinearizationTerms(DetectionContext &Context,
                                        const SCEVUnknown *BasePointer) const {
   SmallVector<const SCEV *, 4> Terms;
   for (const auto &Pair : Context.Accesses[BasePointer]) {
+    auto *V = BasePointer->getValue();
+    auto *Instr = dyn_cast<Instruction>(V);
+    auto It = AnnotedSizes.Map.find(Instr);
+    if (It != AnnotedSizes.Map.end()) {
+      errs() << "on trouve une info de size sur " << *Instr << "\n";
+      auto &ArrayData = It->second;
+      auto Sizes = ArrayData.Sizes;
+
+      SmallVector<const SCEV *, 2> SCEVs;
+      // ++Sizes.begin() >>> Skip the first size because it isn't use in
+      // delinearization
+      for (auto S = ++Sizes.begin(); S != Sizes.end(); S++) {
+        SCEVs.emplace_back(SE.getSCEV(*S));
+        if (Terms.empty()) {
+          Terms.push_back(SCEVs.front());
+        } else {
+          Terms.push_back(SE.getMulExpr(SCEVs));
+        }
+      }
+      break;
+    }
+
     std::vector<const SCEV *> MaxTerms;
     SCEVRemoveMax::rewrite(Pair.second, SE, &MaxTerms);
     if (!MaxTerms.empty()) {
@@ -918,27 +943,18 @@ ScopDetection::getDelinearizationTerms(DetectionContext &Context,
     // most likely no array sizes. However, terms that are multiplied with
     // them are likely candidates for array sizes.
     if (auto *AF = dyn_cast<SCEVAddExpr>(Pair.second)) {
-      for (auto Op : AF->operands()) {
-        if (auto *AF2 = dyn_cast<SCEVAddRecExpr>(Op))
+      for (const auto *Op : AF->operands()) {
+        if (auto *AF2 = dyn_cast<SCEVAddRecExpr>(Op)) {
           collectParametricTerms(SE, AF2, Terms);
+        }
         if (auto *AF2 = dyn_cast<SCEVMulExpr>(Op)) {
           SmallVector<const SCEV *, 0> Operands;
 
-          for (auto *MulOp : AF2->operands()) {
-            if (auto *Const = dyn_cast<SCEVConstant>(MulOp))
-              Operands.push_back(Const);
-            if (auto *Unknown = dyn_cast<SCEVUnknown>(MulOp)) {
-              if (auto *Inst = dyn_cast<Instruction>(Unknown->getValue())) {
-                if (!Context.CurRegion.contains(Inst))
-                  Operands.push_back(MulOp);
+          developSCEVMulExpr(SE, AF2, Operands);
 
-              } else {
-                Operands.push_back(MulOp);
-              }
-            }
+          for (const auto *Op : Operands) {
+            Terms.push_back(Op);
           }
-          if (Operands.size())
-            Terms.push_back(SE.getMulExpr(Operands));
         }
       }
     }
@@ -1101,6 +1117,20 @@ bool ScopDetection::hasAffineMemoryAccesses(DetectionContext &Context) const {
   return true;
 }
 
+bool ScopDetection::tryToDelinearize(DetectionContext &Context) const {
+  errs() << "tryToDelinearize run\n";
+
+  for (auto &[Key, Value] : Context.Accesses) {
+    for (auto Val : Value) {
+      hasBaseAffineAccesses(Context, Key,
+                            LI.getLoopFor(Val.first->getParent()));
+    }
+  }
+  errs() << "tryToDelinearize done\n";
+
+  return true;
+}
+
 bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
                                   const SCEVUnknown *BP,
                                   DetectionContext &Context) const {
@@ -1109,21 +1139,12 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
     return invalid<ReportNoBasePtr>(Context, /*Assert=*/true, Inst);
 
   auto *BV = BP->getValue();
-  // errs() << "\tvalues " << *BV << "\n";
   if (isa<UndefValue>(BV))
     return invalid<ReportUndefBasePtr>(Context, /*Assert=*/true, Inst);
 
   // FIXME: Think about allowing IntToPtrInst
   if (IntToPtrInst *Inst = dyn_cast<IntToPtrInst>(BV))
     return invalid<ReportIntToPtr>(Context, /*Assert=*/true, Inst);
-
-  // Check that the base address of the access is invariant in the current
-  // region.
-  // if (isa<Argument>(BV) or isa<Constant>(BV)) {
-  //   if (auto *LI = dyn_cast<LoadInst>(Inst)) {
-  //     Context.RequiredILS.insert(LI);
-  //   }
-  // } else
 
   if (!isInvariant(*BV, Context.CurRegion, Context))
     return invalid<ReportVariantBasePtr>(Context, /*Assert=*/true, BV, Inst);
@@ -1165,9 +1186,12 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
   } else if (PollyDelinearize && !IsVariantInNonAffineLoop) {
     Context.Accesses[BP].push_back({Inst, AF});
 
-    if (!IsAffine)
+    auto *BPInstr = dyn_cast<Instruction>(BV);
+    if (!IsAffine or
+        (BPInstr && AnnotedSizes.Map.find(BPInstr) != AnnotedSizes.Map.end())) {
       Context.NonAffineAccesses.insert(
           std::make_pair(BP, LI.getLoopFor(Inst->getParent())));
+    }
   } else if (!AllowNonAffine && !IsAffine) {
     return invalid<ReportNonAffineAccess>(Context, /*Assert=*/true, AF, Inst,
                                           BV);
@@ -1243,13 +1267,6 @@ bool ScopDetection::isValidMemoryAccess(MemAccInst Inst,
   const SCEVUnknown *BasePointer;
 
   BasePointer = dyn_cast<SCEVUnknown>(SE.getPointerBase(AccessFunction));
-
-  // errs() << "on anna " << *Inst.get() << "\t | \t" << *AccessFunction
-  //        << "\t | \t" << *BasePointer << "\n ";
-  // if (Ptr)
-  //   errs() << "\t ptr" << *Ptr << "\n";
-  // if (L)
-  //   errs() << "\t L" << *L << "\n";
 
   if (not L) {
     if (auto *LI = dyn_cast<LoadInst>(Inst)) {
@@ -2089,9 +2106,12 @@ bool ScopDetectionWrapperPass::runOnFunction(Function &F) {
   auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
   auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
   auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+  auto &AnnotedSizes =
+      getAnalysis<ExtractAnnotatedSizesWrapperPass>(F).getAnnotationSizes();
   auto &ORE = getAnalysis<OptimizationRemarkEmitterWrapperPass>().getORE();
 
-  Result = std::make_unique<ScopDetection>(DT, SE, LI, RI, AA, ORE);
+  Result =
+      std::make_unique<ScopDetection>(DT, SE, LI, RI, AA, AnnotedSizes, ORE);
   Result->detect(F);
   return false;
 }
@@ -2133,25 +2153,15 @@ char ScopDetectionWrapperPass::ID;
 AnalysisKey ScopAnalysis::Key;
 
 ScopDetection ScopAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
-  // llvm::errs() << "ScopAnalysis run on " << F.getName() << "\n";
   auto &LI = FAM.getResult<LoopAnalysis>(F);
   auto &RI = FAM.getResult<RegionInfoAnalysis>(F);
   auto &AA = FAM.getResult<AAManager>(F);
   auto &SE = FAM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
+  auto &AnnotedSizes = FAM.getResult<ExtractAnnotatedSizes>(F);
   auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(F);
 
-  ScopDetection Result(DT, SE, LI, RI, AA, ORE);
-
-  // if (PollyManualDetection) {
-  //   llvm::errs() << "polly manual detection\n";
-  // }
-  // if (F.hasFnAttribute("findSCoP")) {
-  //   llvm::errs() << "findSCoP\n";
-  // }
-  // if (F.hasFnAttribute("polly.findSCoP")) {
-  //   llvm::errs() << "polly.findSCoP\n";
-  // }
+  ScopDetection Result(DT, SE, LI, RI, AA, AnnotedSizes, ORE);
 
   if (not PollyManualDetection or
       (PollyManualDetection and
@@ -2163,7 +2173,6 @@ ScopDetection ScopAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
 
     llvm::errs() << "\n\n\n";
   }
-  // llvm::errs() << "ScopAnalysis done\n";
   return Result;
 }
 

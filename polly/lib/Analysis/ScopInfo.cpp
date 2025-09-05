@@ -939,17 +939,12 @@ void MemoryAccess::print(raw_ostream &OS) const {
 
   OS << "[Scalar: " << isScalarKind() << "]\n";
 
-  if (isAffine())
-    OS.indent(16) << "Affine\n";
-  else
-    OS.indent(16) << "Not affine\n";
-
   if (getAccessInstruction())
     OS.indent(16) << "[Instruction: " << *getAccessInstruction() << "]\n";
   OS.indent(16) << getOriginalAccessRelationStr() << ";\n";
   int Index = 0;
   for (const auto *Subscript : subscripts()) {
-    OS.indent(16) << "subscript " << Index++ << " " << *Subscript << ";\n";
+    OS.indent(16) << "subscript " << Index++ << " : " << *Subscript << ";\n";
   }
 
   if (hasNewAccessRelation())
@@ -1240,6 +1235,8 @@ Loop *ScopStmt::getLoopForDimension(unsigned Dimension) const {
 isl::ctx ScopStmt::getIslCtx() const { return Parent.getIslCtx(); }
 
 isl::set ScopStmt::getDomain() const { return Domain; }
+
+void ScopStmt::setDomain(isl::set Domain) { this->Domain = Domain; }
 
 isl::space ScopStmt::getDomainSpace() const { return Domain.get_space(); }
 
@@ -1692,8 +1689,6 @@ void Scop::removeStmts(function_ref<bool(ScopStmt &)> ShouldDelete,
 void Scop::removeStmtNotInDomainMap() {
   removeStmts([this](ScopStmt &Stmt) -> bool {
     isl::set Domain = DomainMap.lookup(Stmt.getEntryBlock());
-    errs() << "\t\t\t\t\talpha function for " << Stmt.getBaseName() << "  "
-           << Domain << "\n";
     if (Domain.is_null())
       return true;
     return Domain.is_empty();
@@ -1900,13 +1895,6 @@ bool Scop::hasFeasibleRuntimeContext() const {
   isl::set NegativeContext = getInvalidContext();
   PositiveContext = PositiveContext.intersect_params(Context);
   PositiveContext = PositiveContext.intersect_params(getDomains().params());
-  llvm::errs() << "getAssumedContext " << getAssumedContext() << "\n";
-  llvm::errs() << "getInvalidContext " << getInvalidContext() << "\n";
-  llvm::errs() << "Context " << Context << "\n";
-  operator<<(errs(), Context);
-  llvm::errs() << "getDomains " << getDomains() << "\n";
-  llvm::errs() << "Params " << getDomains().params() << "\n";
-  llvm::errs() << "PositiveContext " << PositiveContext << "\n\n";
   return PositiveContext.is_empty().is_false() &&
          PositiveContext.is_subset(NegativeContext).is_false();
 }
@@ -2221,12 +2209,8 @@ isl::union_set Scop::getDomains() const {
   isl_space *EmptySpace = isl_space_params_alloc(getIslCtx().get(), 0);
   isl_union_set *Domain = isl_union_set_empty(EmptySpace);
 
-  for (const ScopStmt &Stmt : *this) {
-    // if (not isl_set_dim(Stmt.getDomain().get(), isl_dim_set)) {
-    //   continue;
-    // }
+  for (const ScopStmt &Stmt : *this)
     Domain = isl_union_set_add_set(Domain, Stmt.getDomain().release());
-  }
 
   return isl::manage(Domain);
 }
@@ -2728,11 +2712,7 @@ ScopInfo::ScopInfo(const DataLayout &DL, ScopDetection &SD, ScalarEvolution &SE,
                    LoopInfo &LI, AliasAnalysis &AA, DominatorTree &DT,
                    AssumptionCache &AC, OptimizationRemarkEmitter &ORE)
     : DL(DL), SD(SD), SE(SE), LI(LI), AA(AA), DT(DT), AC(AC), ORE(ORE) {
-  llvm::errs() << "nombre de valid region juste avant de recompute "
-               << std::distance(SD.begin(), SD.end()) << "\n";
   recompute();
-  llvm::errs() << "nombre de valid region juste apres de recompute "
-               << std::distance(SD.begin(), SD.end()) << "\n";
 }
 
 void ScopInfo::recompute() {
@@ -2749,8 +2729,6 @@ void ScopInfo::recompute() {
     std::unique_ptr<Scop> S = SB.getScop();
     if (!S)
       continue;
-    llvm::errs() << "on passe le test du build scop\n";
-    llvm::errs() << S->getContext() << "\n";
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_STATS)
     ScopDetection::LoopStats Stats =
         ScopDetection::countBeneficialLoops(&S->getRegion(), SE, LI, 0);

@@ -18,6 +18,7 @@
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
 #include "polly/Support/GICHelper.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/SCEVValidator.h"
 #include "polly/Support/ScopHelper.h"
@@ -1118,15 +1119,11 @@ void ScopBuilder::buildPHIAccesses(ScopStmt *PHIStmt, PHINode *PHI,
         ensureValueRead(Op, OpStmt);
       continue;
     }
-    // errs() << "jsp comment pleurer\n";
-    // errs() << "op : " << *Op << "\n";
-    // errs() << "OpStmt : " << *OpStmt->getBaseName() << "\n";
     OnlyNonAffineSubRegionOperands = false;
     ensurePHIWrite(PHI, OpStmt, OpBB, Op, IsExitBlock);
   }
 
   if (!OnlyNonAffineSubRegionOperands && !IsExitBlock) {
-    errs() << "je comprend rien\n";
     addPHIReadAccess(PHIStmt, PHI);
   }
 }
@@ -1193,7 +1190,7 @@ void ScopBuilder::buildSchedule() {
   buildSchedule(scop->getRegion().getNode(), LoopStack);
   assert(LoopStack.size() == 1 && LoopStack.back().L == L);
   scop->setScheduleTree(LoopStack[0].Schedule);
-  llvm::errs() << "buildSchedule end\n";
+  llvm::errs() << "buildSchedule end\n\n";
 }
 
 /// To generate a schedule for the elements in a Region we traverse the Region
@@ -1555,16 +1552,7 @@ bool ScopBuilder::buildAccessMultiDimParam(MemAccInst Inst, ScopStmt *Stmt) {
 
   assert(BasePointer && "Could not find base pointer");
 
-  errs() << "Address " << *Address << "\n";
-  errs() << "Val " << *Val << "\n";
-  errs() << "ElementType " << *ElementType << "\n";
-  errs() << "AccessFunction " << *AccessFunction << "\n";
-  errs() << "BasePointer " << *BasePointer << "\n";
-
   auto &InsnToMemAcc = scop->getInsnToMemAccMap();
-  for (auto [key, value] : InsnToMemAcc) {
-    errs() << "key " << *key << "   value " << *value.Insn << "\n";
-  }
   auto AccItr = InsnToMemAcc.find(Inst);
   if (AccItr == InsnToMemAcc.end())
     return false;
@@ -1573,12 +1561,6 @@ bool ScopBuilder::buildAccessMultiDimParam(MemAccInst Inst, ScopStmt *Stmt) {
 
   Sizes.insert(Sizes.end(), AccItr->second.Shape->DelinearizedSizes.begin(),
                AccItr->second.Shape->DelinearizedSizes.end());
-
-  for (const auto *Size : Sizes)
-    if (Size)
-      errs() << "Size " << *Size << "\n";
-    else
-      errs() << "Size nullptr" << "\n";
 
   // In case only the element size is contained in the 'Sizes' array, the
   // access does not access a real multi-dimensional array. Hence, we allow
@@ -1743,12 +1725,6 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
   assert(BasePointer && "Could not find base pointer");
   AccessFunction = SE.getMinusSCEV(AccessFunction, BasePointer);
 
-  errs() << "Address " << *Address << "\n";
-  errs() << "Val " << *Val << "\n";
-  errs() << "ElementType " << *ElementType << "\n";
-  errs() << "AccessFunction " << *AccessFunction << "\n";
-  errs() << "BasePointer " << *BasePointer << "\n";
-
   // Check if the access depends on a loop contained in a non-affine subregion.
   bool isVariantInNonAffineLoop = false;
   SetVector<const Loop *> Loops;
@@ -1780,42 +1756,31 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
 }
 
 void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
-  // llvm::errs() << "build memory access for " << *Inst.get() << "\n";
-  errs() << "\n";
   if (buildAccessMemIntrinsic(Inst, Stmt)) {
     Inst->print(errs(), true);
     errs() << " " << "buildAccessMemIntrinsic\n";
     return;
   }
-  errs() << " " << "buildAccessMemIntrinsic passed\n";
 
   if (buildAccessCallInst(Inst, Stmt)) {
     Inst->print(errs(), true);
     errs() << " " << "buildAccessCallInst\n";
     return;
   }
-  errs() << " " << "buildAccessCallInst passed\n";
 
   if (buildAccessMultiDimFixed(Inst, Stmt)) {
     Inst->print(errs(), true);
     errs() << " " << "buildAccessMultiDimFixed\n";
     return;
   }
-  errs() << " " << "buildAccessMultiDimFixed passed\n";
 
   if (buildAccessMultiDimParam(Inst, Stmt)) {
-    Inst->print(errs(), true);
-    errs() << " " << "buildAccessMultiDimParam\n";
     return;
   }
-  errs() << " " << "buildAccessMultiDimParam passed\n";
 
   if (buildAccessSingleDim(Inst, Stmt)) {
-    Inst->print(errs(), true);
-    errs() << " " << "buildAccessSingleDim\n";
     return;
   }
-  errs() << " " << "buildAccessSingleDim passed\n";
 
   llvm_unreachable(
       "At least one of the buildAccess functions must handled this access, or "
@@ -1823,12 +1788,15 @@ void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
 }
 
 void ScopBuilder::buildAccessFunctions() {
+  errs() << "buildAccessFunctions run\n";
   for (auto &Stmt : *scop) {
     if (Stmt.isBlockStmt()) {
+      errs() << "Stmt " << Stmt.getBaseName() << " isBlockStmt\n";
       buildAccessFunctions(&Stmt, *Stmt.getBasicBlock());
       continue;
     }
 
+    errs() << "Stmt " << Stmt.getBaseName() << " not isBlockStmt\n";
     Region *R = Stmt.getRegion();
     for (BasicBlock *BB : R->blocks())
       buildAccessFunctions(&Stmt, *BB, R);
@@ -1842,6 +1810,7 @@ void ScopBuilder::buildAccessFunctions() {
     for (Instruction &Inst : *BB)
       buildEscapingDependences(&Inst);
   }
+  errs() << "buildAccessFunctions done\n";
 }
 
 bool ScopBuilder::shouldModelInst(Instruction *Inst, Loop *L) {
@@ -2150,12 +2119,10 @@ void ScopBuilder::buildAccessFunctions(ScopStmt *Stmt, BasicBlock &BB,
   if (SD.isErrorBlock(BB, scop->getRegion()))
     return;
 
-  errs() << "on travaille sur le stmt : " << Stmt->getBaseName() << "\n";
   auto BuildAccessesForInst = [this, Stmt,
                                NonAffineSubRegion](Instruction *Inst) {
     PHINode *PHI = dyn_cast<PHINode>(Inst);
     if (PHI) {
-      errs() << "Inst phi : " << *Inst << "\n";
       buildPHIAccesses(Stmt, PHI, NonAffineSubRegion, false);
     }
 
@@ -3387,37 +3354,7 @@ bool ScopBuilder::buildAliasGroups() {
 
   std::tie(AliasGroups, HasWriteAccess) = buildAliasGroupsForAccesses();
 
-  int Ind = 0;
-  for (AliasGroupTy &AGV : AliasGroups) {
-    errs() << "AliasGroupTy " << Ind << "\n";
-    for (auto *AG : AGV) {
-      errs() << "\t" << *AG->getAccessInstruction() << "\n";
-    }
-    errs() << "\n";
-    Ind++;
-  }
-
-  for (auto *Sai : HasWriteAccess) {
-    Sai->print(errs(), true);
-    errs() << "\n";
-  }
-
   splitAliasGroupsByDomain(AliasGroups);
-
-  Ind = 0;
-  for (AliasGroupTy &AGV : AliasGroups) {
-    errs() << "AliasGroupTy " << Ind << "\n";
-    for (auto *AG : AGV) {
-      errs() << "\t" << *AG->getAccessInstruction() << "\n";
-    }
-    errs() << "\n";
-    Ind++;
-  }
-
-  for (auto *Sai : HasWriteAccess) {
-    Sai->print(errs(), true);
-    errs() << "\n";
-  }
 
   for (AliasGroupTy &AG : AliasGroups) {
     if (!scop->hasFeasibleRuntimeContext()) {
@@ -3793,6 +3730,7 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   addRecordedAssumptions();
 
   scop->simplifyContexts();
+  llvm::errs() << "scop after simplifyContexts : " << *scop << "\n";
   if (!buildAliasChecks()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because could not build alias checks\n");
     llvm::errs() << "buildscop function done (not buildAliasChecks)\n";
