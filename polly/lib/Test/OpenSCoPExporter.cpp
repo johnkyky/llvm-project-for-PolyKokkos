@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/OpenSCoPExporter.h"
+#include "polly/JSONExporter.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
 #include "polly/ScopPass.h"
@@ -735,7 +736,7 @@ ScopStmt &getStmtByName(Scop &S, StringRef Name) {
 }
 } // namespace
 
-osl_scop_p OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
+void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   osl_scop_p OSLScop = osl_scop_malloc();
   OSLScop->version = 1;
   OSLScop->language = strdup("C++");
@@ -762,7 +763,7 @@ osl_scop_p OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
     isl::id Id = C.get_dim_id(isl::dim::param, I);
     if (Id.is_null()) {
       errs() << "Error retrieving the parameter id at index " << I << ".\n";
-      return nullptr;
+      return;
     }
     osl_strings_add(Str, isl_id_get_name(Id.get()));
   }
@@ -779,31 +780,29 @@ osl_scop_p OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
     llvm_unreachable("Could not open the OpenSCoP file for writing.");
 
   osl_scop_print(File, OSLScop);
+  osl_scop_free(OSLScop);
 
   std::fclose(File);
-
-  return OSLScop;
 }
 
 PreservedAnalyses OpenSCoPExportPass::run(Scop &S, ScopAnalysisManager &SAM,
                                           ScopStandardAnalysisResults &SAR,
                                           SPMUpdater &) {
   errs() << "Exporting OpenScop for SCoP '" << S.getNameStr() << "\n";
-  osl_scop_p OSLScop = exportOpenScop(S, "testOSP.scop");
-  OpenSCoPImportPass::importOpenScop(S, OSLScop, "testOSP.scop");
-  // importOpenScopTest(S, OSLScop, "testOSP.scop");
-  osl_scop_free(OSLScop);
+
+  std::string FileName = getFileName(S, "", "scop");
+  exportOpenScop(S, FileName);
+
   errs() << "End of exporting OpenScop for SCoP '" << S.getNameStr() << "\n";
   return PreservedAnalyses::all();
 }
 
-void OpenSCoPImportPass::importOpenScop(Scop &S, osl_scop_p OSLScop,
-                                        std::string FileName) {
+void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
   FILE *File = std::fopen(FileName.c_str(), "r");
   if (!File)
     llvm_unreachable("Could not open the OpenSCoP file for writing.");
 
-  OSLScop = osl_scop_read(File);
+  osl_scop_p OSLScop = osl_scop_read(File);
 
   std::fclose(File);
 
@@ -875,8 +874,11 @@ PreservedAnalyses OpenSCoPImportPass::run(Scop &S, ScopAnalysisManager &SAM,
                                           ScopStandardAnalysisResults &SAR,
                                           SPMUpdater &) {
   errs() << "Importing OpenScop for SCoP '" << S.getNameStr() << "\n";
-  // importOpenScop(S, "testOSP.scop");
-  // test(S);
+
+  std::string FileName = getFileName(S, "", "scop");
+
+  importOpenScop(S, FileName);
+
   errs() << "End of importOpenScop\n\n\n";
   return PreservedAnalyses::all();
 }

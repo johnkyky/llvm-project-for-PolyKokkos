@@ -10,12 +10,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ScheduleOptimizer.h"
+#include "polly/JSONExporter.h"
 #include "polly/Test/OpenSCoPExporter.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdio>
 #include <fstream>
 #include <osl/scop.h>
+#include <string>
 
 using namespace llvm;
 using namespace polly;
@@ -63,24 +65,31 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
                                 SPMUpdater &U) {
   errs() << "PlutoScheduleOptimizerPass run on " << S.getName() << "\n";
 
-  osl_scop_p OSLScop =
-      OpenSCoPExportPass::exportOpenScop(S, "pluto_input.scop");
-  osl_scop_free(OSLScop);
+  std::string FileNameInput = "./" + getFileName(S, "_input", "scop");
 
-  errs() << "Calling pluto on the file pluto.scop\n";
+  OpenSCoPExportPass::exportOpenScop(S, FileNameInput);
 
-  std::system("docker cp pluto_input.scop pluto_container:/home/");
-  auto ResultPluto = exec(
-      "docker exec pluto_container sh -c \"cat /home/pluto_input.scop | pluto "
-      "--readscop stdin -o stdout\"");
+  errs() << "Calling pluto on the file " << FileNameInput << "\n";
+
+  std::string CopyCommand =
+      "docker cp " + FileNameInput + " pluto_container:/home/";
+  errs() << "CopyCommand: " << CopyCommand << "\n";
+  std::system(CopyCommand.c_str());
+
+  std::string RunPlutoCommand =
+      "docker exec pluto_container sh -c \"cat /home/" + FileNameInput +
+      " | pluto --readscop stdin -o stdout\"";
+  errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n";
+  auto ResultPluto = exec(RunPlutoCommand.c_str());
 
   errs() << "Result of pluto:\n" << ResultPluto << "\n";
 
   std::string NewScopExtracted = extractOpenScopFromString(ResultPluto);
 
-  saveToFile("pluto_output.scop", NewScopExtracted);
+  std::string FileNameOutput = getFileName(S, "_output", "scop");
+  saveToFile(FileNameOutput, NewScopExtracted);
 
-  OpenSCoPImportPass::importOpenScop(S, OSLScop, "pluto_output.scop");
+  OpenSCoPImportPass::importOpenScop(S, FileNameOutput);
 
   return PreservedAnalyses::all();
 }

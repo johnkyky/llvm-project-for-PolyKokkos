@@ -18,7 +18,7 @@ namespace polly {
 /// This pass exports a scop to a openscop file. The filename is generated from
 /// the concatenation of the function and scop name.
 struct OpenSCoPExportPass final : llvm::PassInfoMixin<OpenSCoPExportPass> {
-  static osl_scop_p exportOpenScop(Scop &S, std::string FileName);
+  static void exportOpenScop(Scop &S, std::string FileName);
   llvm::PreservedAnalyses run(Scop &, ScopAnalysisManager &,
                               ScopStandardAnalysisResults &, SPMUpdater &);
 };
@@ -26,7 +26,7 @@ struct OpenSCoPExportPass final : llvm::PassInfoMixin<OpenSCoPExportPass> {
 /// This pass imports a scop from a openscop file. The filename is deduced from
 /// the concatenation of the function and scop name.
 struct OpenSCoPImportPass final : llvm::PassInfoMixin<OpenSCoPImportPass> {
-  static void importOpenScop(Scop &S, osl_scop_p OSLScop, std::string FileName);
+  static void importOpenScop(Scop &S, std::string FileName);
   llvm::PreservedAnalyses run(Scop &, ScopAnalysisManager &,
                               ScopStandardAnalysisResults &, SPMUpdater &);
 };

@@ -12,24 +12,15 @@
 
 #include "polly/JSONExporter.h"
 #include "polly/DependenceInfo.h"
-#include "polly/LinkAllPasses.h"
 #include "polly/Options.h"
-#include "polly/ScopInfo.h"
-#include "polly/ScopPass.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/ScopLocation.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
-#include "isl/map.h"
-#include "isl/set.h"
-#include <memory>
-#include <string>
-#include <system_error>
 
 using namespace llvm;
 using namespace polly;
@@ -82,12 +73,22 @@ public:
 };
 } // namespace
 
-static std::string getFileName(Scop &S, StringRef Suffix = "") {
+std::string polly::getFileName(Scop &S, StringRef Suffix = "",
+                               StringRef Extension = "jscop") {
   std::string FunctionName = S.getFunction().getName().str();
-  std::string FileName = FunctionName + "___" + S.getNameStr() + ".jscop";
+  std::string FileName =
+      FunctionName + "_" + S.getNameStr() + "." + Extension.str();
 
   if (Suffix != "")
     FileName += "." + Suffix.str();
+
+  if (FileName.size() > 128) {
+    std::hash<std::string> Hasher;
+    size_t Hash = Hasher(FunctionName);
+
+    FileName = "func_" + std::to_string(Hash) + "_" + S.getNameStr() +
+               Suffix.str() + "." + Extension.str();
+  }
 
   return FileName;
 }
@@ -177,7 +178,7 @@ static json::Value getJSON(Scop &S) {
 static void exportScop(Scop &S) {
   std::string FileName = ImportDir + "/" + getFileName(S);
 
-  json::Value jscop = getJSON(S);
+  json::Value JScop = getJSON(S);
 
   // Write to file.
   std::error_code EC;
@@ -188,7 +189,7 @@ static void exportScop(Scop &S) {
          << FunctionName << "' to '" << FileName << "'.\n";
 
   if (!EC) {
-    F.os() << formatv("{0:3}", jscop);
+    F.os() << formatv("{0:3}", JScop);
     F.os().close();
     if (!F.os().has_error()) {
       errs() << "\n";
@@ -197,7 +198,7 @@ static void exportScop(Scop &S) {
     }
   }
 
-  errs() << "  error opening file for writing!\n";
+  errs() << "  error opening file for writing because " << EC.message() << "\n";
   F.os().clear_error();
 }
 
@@ -691,8 +692,8 @@ static bool importArrays(Scop &S, const json::Object &JScop) {
 /// @param NewAccessStrings Optionally record the imported access strings
 ///
 /// @returns true on success, false otherwise. Beware that if this returns
-/// false, the Scop may still have been modified. In this case the Scop contains
-/// invalid information.
+/// false, the Scop may still have been modified. In this case the Scop
+/// contains invalid information.
 static bool importScop(Scop &S, const Dependences &D, const DataLayout &DL,
                        std::vector<std::string> *NewAccessStrings = nullptr) {
   std::string FileName = ImportDir + "/" + getFileName(S, ImportPostfix);

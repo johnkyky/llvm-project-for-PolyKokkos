@@ -17,6 +17,8 @@ llvm::Pass *createJSONExporterPass();
 llvm::Pass *createJSONImporterPass();
 llvm::Pass *createJSONImporterPrinterLegacyPass(llvm::raw_ostream &OS);
 
+std::string getFileName(Scop &S, StringRef Suffix, StringRef Extension);
+
 /// This pass exports a scop to a jscop file. The filename is generated from the
 /// concatenation of the function and scop name.
 struct JSONExportPass final : llvm::PassInfoMixin<JSONExportPass> {
