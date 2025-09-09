@@ -910,14 +910,12 @@ ScopDetection::getDelinearizationTerms(DetectionContext &Context,
     auto *Instr = dyn_cast<Instruction>(V);
     auto It = AnnotedSizes.Map.find(Instr);
     if (It != AnnotedSizes.Map.end()) {
-      errs() << "on trouve une info de size sur " << *Instr << "\n";
       auto &ArrayData = It->second;
       auto Sizes = ArrayData.Sizes;
 
       SmallVector<const SCEV *, 2> SCEVs;
-      // ++Sizes.begin() >>> Skip the first size because it isn't use in
-      // delinearization
-      for (auto S = ++Sizes.begin(); S != Sizes.end(); S++) {
+      // Skip the first size because it isn't use in delinearization
+      for (auto S = Sizes.rbegin(); S != std::prev(Sizes.rend()); ++S) {
         SCEVs.emplace_back(SE.getSCEV(*S));
         if (Terms.empty()) {
           Terms.push_back(SCEVs.front());
