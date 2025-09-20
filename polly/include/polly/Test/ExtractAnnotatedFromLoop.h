@@ -43,6 +43,8 @@ struct AnnotationData {
   auto end() { return Map.end(); }
   auto begin() const { return Map.begin(); }
   auto end() const { return Map.end(); }
+  bool empty() const { return Map.empty(); }
+  size_t size() const { return Map.size(); }
 };
 
 class ExtractAnnotatedSizes : public AnalysisInfoMixin<ExtractAnnotatedSizes> {

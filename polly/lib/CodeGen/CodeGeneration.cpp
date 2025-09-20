@@ -361,6 +361,9 @@ public:
 PreservedAnalyses CodeGenerationPass::run(Scop &S, ScopAnalysisManager &SAM,
                                           ScopStandardAnalysisResults &AR,
                                           SPMUpdater &U) {
+  errs() << "Shedule \n";
+  errs() << S.getSchedule() << "\n";
+  errs() << S.getScheduleTree() << "\n";
   auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
   if (generateCode(S, AI, AR.LI, AR.DT, AR.SE, AR.RI)) {
     U.invalidateScop(S);

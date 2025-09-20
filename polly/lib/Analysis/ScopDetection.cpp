@@ -347,7 +347,7 @@ ScopDetection::ScopDetection(const DominatorTree &DT, ScalarEvolution &SE,
                              LoopInfo &LI, RegionInfo &RI, AAResults &AA,
                              AnnotationData &AnnotedSizes,
                              OptimizationRemarkEmitter &ORE)
-    : DT(DT), SE(SE), LI(LI), RI(RI), AA(AA), AnnotedSizes(AnnotedSizes),
+    : DT(DT), SE(SE), LI(LI), RI(RI), AA(AA), AnnotedDataSizes(AnnotedSizes),
       ORE(ORE) {}
 
 void ScopDetection::detect(Function &F) {
@@ -908,8 +908,8 @@ ScopDetection::getDelinearizationTerms(DetectionContext &Context,
   for (const auto &Pair : Context.Accesses[BasePointer]) {
     auto *V = BasePointer->getValue();
     auto *Instr = dyn_cast<Instruction>(V);
-    auto It = AnnotedSizes.Map.find(Instr);
-    if (It != AnnotedSizes.Map.end()) {
+    auto It = AnnotedDataSizes.Map.find(Instr);
+    if (It != AnnotedDataSizes.Map.end()) {
       auto &ArrayData = It->second;
       auto Sizes = ArrayData.Sizes;
 
@@ -1185,8 +1185,8 @@ bool ScopDetection::isValidAccess(Instruction *Inst, const SCEV *AF,
     Context.Accesses[BP].push_back({Inst, AF});
 
     auto *BPInstr = dyn_cast<Instruction>(BV);
-    if (!IsAffine or
-        (BPInstr && AnnotedSizes.Map.find(BPInstr) != AnnotedSizes.Map.end())) {
+    if (!IsAffine or (BPInstr && AnnotedDataSizes.Map.find(BPInstr) !=
+                                     AnnotedDataSizes.Map.end())) {
       Context.NonAffineAccesses.insert(
           std::make_pair(BP, LI.getLoopFor(Inst->getParent())));
     }
@@ -1289,26 +1289,22 @@ bool ScopDetection::isValidInstruction(Instruction &Inst,
         for (User *U : PHI->users()) {
           auto *UI = dyn_cast<Instruction>(U);
           if (!UI || !UI->isTerminator()) {
-            /*llvm::errs() << "\t\t\tphi1\n";*/
             return false;
           }
         }
       } else {
-        /*llvm::errs() << "\t\t\tphi2\n";*/
         return false;
       }
     }
   }
 
   if (isa<LandingPadInst>(&Inst) || isa<ResumeInst>(&Inst)) {
-    /*llvm::errs() << "\t\t\tLandingPadInst ou ResumeInst\n";*/
     return false;
   }
 
   // We only check the call instruction but not invoke instruction.
   if (CallInst *CI = dyn_cast<CallInst>(&Inst)) {
     if (isValidCallInst(*CI, Context)) {
-      // llvm::errs() << "\t\t\tisValidCallInst\n";
       CI->setMetadata("cppoly.inline", MDNode::get(CI->getContext(), {}));
       return true;
     }
@@ -1333,7 +1329,6 @@ bool ScopDetection::isValidInstruction(Instruction &Inst,
       return invalid<ReportNonSimpleMemoryAccess>(Context, /*Assert=*/true,
                                                   &Inst);
 
-    /*llvm::errs() << "\t\t\tisSimple failed\n";*/
     return isValidMemoryAccess(MemInst, Context);
   }
 
@@ -1756,14 +1751,8 @@ bool ScopDetection::allBlocksValid(DetectionContext &Context) {
     }
   }
 
-  /*CurRegion.print(llvm::errs());*/
   for (BasicBlock *BB : CurRegion.blocks()) {
-    /*BB->print(llvm::errs());*/
     bool IsErrorBlock = isErrorBlock(*BB, CurRegion);
-    /*llvm::errs() << "IsErrorBlock: " << IsErrorBlock << " " <<
-     * BB->getName()*/
-    /*             << "\n";*/
-
     // Also check exception blocks (and possibly register them as non-affine
     // regions). Even though exception blocks are not modeled, we use them
     // to forward-propagate domain constraints during ScopInfo construction.

@@ -2721,7 +2721,6 @@ void ScopInfo::recompute() {
   /// function.
   for (auto &It : SD) {
     Region *R = const_cast<Region *>(It);
-    llvm::errs() << "\nrecompute " << *R << "\n";
     if (!SD.isMaxRegionInScop(*R))
       continue;
 

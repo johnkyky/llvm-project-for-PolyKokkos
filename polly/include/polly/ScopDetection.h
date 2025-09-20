@@ -211,7 +211,7 @@ private:
   LoopInfo &LI;
   RegionInfo &RI;
   AAResults &AA;
-  AnnotationData &AnnotedSizes;
+  AnnotationData &AnnotedDataSizes;
   //@}
 
   /// Map to remember detection contexts for all regions.
@@ -525,6 +525,9 @@ public:
 
   /// Get the LoopInfo stored in this pass.
   LoopInfo *getLI() const { return &LI; }
+
+  // Get the AnnotationData stored in this pass.
+  AnnotationData *getAD() const { return &AnnotedDataSizes; }
 
   /// Is the region is the maximum region of a Scop?
   ///
