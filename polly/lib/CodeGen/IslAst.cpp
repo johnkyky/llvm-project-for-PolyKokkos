@@ -552,6 +552,7 @@ void IslAst::init(const Dependences &D) {
 
   errs() << "schedule : " << ScheduleTree << "\n";
   errs() << "ast : " << Root << "\n";
+  errs() << "ast :\n" << Root.to_C_str() << "\n";
 }
 
 IslAst IslAst::create(Scop &Scop, const Dependences &D) {
