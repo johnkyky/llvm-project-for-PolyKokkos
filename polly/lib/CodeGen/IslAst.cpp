@@ -601,7 +601,7 @@ bool IslAstInfo::isReductionParallel(const isl::ast_node &Node) {
 }
 
 bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
-  errs() << Node << "\n";
+  errs() << Node.to_C_str();
   errs() << "isExecutedInParallel " << "\tPollyParallel " << PollyParallel
          << "\tPollyParallelForce " << PollyParallelForce
          << "\tisInnermost(Node) " << isInnermost(Node)
