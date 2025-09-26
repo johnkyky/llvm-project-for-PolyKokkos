@@ -2346,6 +2346,8 @@ void ScopBuilder::finalizeAccesses() {
 
 void ScopBuilder::updateAccessDimensionality() {
   auto IsDelinearizedFromKokkos = [&](MemoryAccess *Access) {
+    if (not Access->getAccessInstruction())
+      return false;
     if (auto MemInst = MemAccInst::dyn_cast(Access->getAccessInstruction())) {
       Value *Ptr = MemInst.getPointerOperand();
       Loop *L = LI.getLoopFor(MemInst->getParent());
@@ -2353,19 +2355,13 @@ void ScopBuilder::updateAccessDimensionality() {
       const SCEVUnknown *BasePointer;
 
       BasePointer = dyn_cast<SCEVUnknown>(SE.getPointerBase(AccessFunction));
-      errs() << "BasePointer de ma bite: " << *BasePointer << "\n";
       auto *BV = BasePointer->getValue();
-      errs() << "BasePointer Value de ma bite: " << *BV << "\n";
       if (not isa<Instruction>(BV))
         return false;
 
       auto *BPInstr = dyn_cast<Instruction>(BV);
 
       auto B = SD.getAD()->Map[BPInstr];
-      errs() << "ArrayData de ma bite: " << B.Name << "   " << B.Sizes.size()
-             << "\n";
-      errs() << "Size = " << SD.getAD()->size() << "\n";
-      SD.getAD()->print(errs());
       if (not B.Sizes.empty())
         return true;
     }
@@ -2373,7 +2369,7 @@ void ScopBuilder::updateAccessDimensionality() {
   };
   // Check all array accesses for each base pointer and find a (virtual) element
   // size for the base pointer that divides all access functions.
-  for (ScopStmt &Stmt : *scop)
+  for (ScopStmt &Stmt : *scop) {
     for (MemoryAccess *Access : Stmt) {
       if (!Access->isArrayKind())
         continue;
@@ -2395,6 +2391,7 @@ void ScopBuilder::updateAccessDimensionality() {
       auto *Ty = IntegerType::get(SE.getContext(), DivisibleSize * 8);
       Array->updateElementType(Ty);
     }
+  }
 
   for (auto &Stmt : *scop)
     for (auto &Access : Stmt) {
