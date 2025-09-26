@@ -697,43 +697,6 @@ ScopStmt &getStmtByName(Scop &S, StringRef Name) {
 
   errs() << "End of test importOpenScopTest\n\n\n";
 }
-
-[[maybe_unused]] void test(Scop &S) {
-  auto Ctx = S.getIslCtx();
-
-  int NbIterator = 2;
-  int NbParameter = 7;
-
-  // isl::space Space = isl::space(Ctx, NbParameter, NbIterator);
-  // isl::space Space = isl::space::params_alloc(Ctx, NbParameter);
-  isl::space Space = S.getContext().space();
-
-  // for (int I = 0; I < NbParameter; I++) {
-  //   Space =
-  //       Space.set_dim_id(isl::dim::param, I,
-  //                        isl::id(Ctx, std::string("p_" +
-  //                        std::to_string(I))));
-  // }
-
-  // for (int I = 0; I < NbIterator; I++) {
-  //   Space = Space.set_dim_id(
-  //       isl::dim::set, I, isl::id(Ctx, std::string("ite" +
-  //       std::to_string(I))));
-  // }
-
-  errs() << "Space: " << Space << "\n";
-
-  isl::set Set = isl::set::universe(Space);
-  // Set = Set.add_dims(isl::dim::set, 3);
-
-  errs() << "Set: " << Set << "\n";
-
-  errs() << "Context: " << S.getContext() << "\n";
-
-  auto Result = Set.intersect(S.getContext());
-
-  errs() << "Result: " << Result << "\n";
-}
 } // namespace
 
 void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
