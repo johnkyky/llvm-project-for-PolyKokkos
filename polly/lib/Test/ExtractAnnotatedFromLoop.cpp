@@ -107,6 +107,18 @@ AnnotationData extractArrayInfo(Function &F) {
         It++;
         SizesT S;
 
+        // Arrays have always at least one dimension. If not, something is
+        // between name annotation and dim annotation
+        //
+        // Example of what can be between:
+        // %ii = and i64 %i, 4294967295
+        // (convertion to i32 because Kokkos lambda use i32 for the index)
+        //
+        // We skip all instructions until we find the first dim
+        // annotation.
+        while (not isAnnotationInstruction(&*It, "dim").first)
+          It++;
+
         while (auto *AnnoInstDim = isAnnotationInstruction(&*It, "dim").first) {
           Op = AnnoInstDim->getOperand(0);
           if (not Op)
