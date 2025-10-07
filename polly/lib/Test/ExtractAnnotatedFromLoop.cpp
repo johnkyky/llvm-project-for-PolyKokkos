@@ -17,6 +17,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
@@ -230,6 +231,81 @@ bool moveInnerLoopLoad(Function &F) {
   return Res;
 }
 
+bool readBackend(Function &F) {
+  // errs() << "Read backend annotation in function " << F.getName() << "\n";
+  bool Changed = false;
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      auto [CallInst, StrRef] = isAnnotationInstruction(&I, "backend");
+      if (not CallInst)
+        continue;
+      Value *Op = CallInst->getOperand(0);
+      // errs() << "Operand of backend annotation " << *Op << "\n";
+
+      if (auto *PTI = dyn_cast<PtrToIntInst>(Op)) {
+        // errs() << "Found PtrToIntInst " << *PTI << "\n";
+        Value *V = PTI->getOperand(0);
+        if (auto *AI = dyn_cast<AllocaInst>(V)) {
+          // errs() << "Found AllocaInst " << *AI << "\n";
+          for (Value *User : AI->users()) {
+            // errs() << "User " << *User << "\n";
+            if (auto *CI = dyn_cast<llvm::CallInst>(User)) {
+              if (CI->getCalledFunction() &&
+                  CI->getCalledFunction()->getName().starts_with(
+                      "llvm.memcpy")) {
+                Value *Src = CI->getOperand(1); // source du memcpy
+                // errs() << "Source of memcpy " << *Src << "\n";
+                if (auto *GV = dyn_cast<GlobalVariable>(Src)) {
+                  // errs() << "Found global variable " << *GV << "\n";
+                  if (GV->hasInitializer()) {
+                    // errs() << "Global variable has initializer\n";
+                    if (auto *CS =
+                            dyn_cast<ConstantStruct>(GV->getInitializer())) {
+                      if (CS->getNumOperands() == 1) {
+                        if (auto *CA = dyn_cast<ConstantDataArray>(
+                                CS->getOperand(0))) {
+                          StringRef Str = CA->getAsCString();
+                          // errs() << "Found string in struct: " << Str <<
+                          // "\n";
+                          F.addFnAttr("polly.backend", Str);
+                          Changed = true;
+                          continue;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (auto *CE = dyn_cast<ConstantExpr>(Op)) {
+        if (CE->getOpcode() == Instruction::PtrToInt) {
+          Value *PtrOperand = CE->getOperand(0);
+          if (auto *GV = dyn_cast<GlobalVariable>(PtrOperand)) {
+            if (GV->hasInitializer()) {
+              if (auto *StructInit =
+                      dyn_cast<ConstantStruct>(GV->getInitializer())) {
+                Value *FirstElem = StructInit->getOperand(0);
+                if (auto *Array = dyn_cast<ConstantDataArray>(FirstElem)) {
+                  if (Array->isCString()) {
+                    StringRef Str = Array->getAsCString();
+                    F.addFnAttr("polly.backend", Str);
+                    Changed = true;
+                    continue;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return Changed;
+}
+
 } // namespace
 
 void AnnotationData::print(raw_ostream &OS) const {
@@ -268,14 +344,14 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   errs() << "ExtractAnnotatedFromLoop pass run on " << F.getName() << "\n";
 
   bool Changed = false;
-
-  Changed = extractLoopBoundAnnotation(F);
-
-  // auto &SE = FM.getResult<ScalarEvolutionAnalysis>(F);
-  // auto &LI = FM.getResult<LoopAnalysis>(F);
-  // Changed = extractAssumption(F, SE, LI);
-
-  Changed = moveInnerLoopLoad(F);
+  Changed |= readBackend(F);
+  Changed |= extractLoopBoundAnnotation(F);
+  Changed |= moveInnerLoopLoad(F);
+  if (F.hasFnAttribute("polly.backend")) {
+    llvm::Attribute Attr = F.getFnAttribute("polly.backend");
+    llvm::StringRef Value = Attr.getValueAsString();
+    llvm::errs() << "Backend = " << Value << "\n";
+  }
 
   errs() << "ExtractAnnotatedFromLoop pass done\n";
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
