@@ -78,7 +78,9 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
 
   std::string RunPlutoCommand =
       "docker exec pluto_container sh -c \"cat /home/" + FileNameInput +
-      " | pluto --readscop stdin -o stdout\"";
+      " | pluto --tile --nodiamond-tile --nointratileopt --parallel --readscop "
+      "stdin -o "
+      "stdout\"";
   errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n";
   auto ResultPluto = exec(RunPlutoCommand.c_str());
 
