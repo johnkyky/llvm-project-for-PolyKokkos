@@ -73,6 +73,25 @@ public:
 };
 } // namespace
 
+std::string polly::getFileName(Function &F, StringRef Suffix = "",
+                               StringRef Extension = "jscop") {
+  std::string FunctionName = F.getName().str();
+  std::string FileName = FunctionName + "." + Extension.str();
+
+  if (Suffix != "")
+    FileName += "." + Suffix.str();
+
+  if (FileName.size() > 128) {
+    std::hash<std::string> Hasher;
+    size_t Hash = Hasher(FunctionName);
+
+    FileName = "func_" + std::to_string(Hash) + "_" + Suffix.str() + "." +
+               Extension.str();
+  }
+
+  return FileName;
+}
+
 std::string polly::getFileName(Scop &S, StringRef Suffix = "",
                                StringRef Extension = "jscop") {
   std::string FunctionName = S.getFunction().getName().str();
