@@ -670,7 +670,14 @@ void IslNodeBuilder::createForParallel(__isl_take isl_ast_node *For) {
 }
 
 void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
-  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(For))) {
+  auto Cond = false;
+  if (S.getBackend() != Scop::BackendTy::Undefined)
+    Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For),
+                                            S.getBackend() > 0);
+  else
+    Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For));
+
+  if (Cond) {
     createForParallel(For);
     llvm::errs() << "c'est une boucle parallel\n";
     return;

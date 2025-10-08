@@ -1643,6 +1643,9 @@ public:
   /// non read only and read only accesses for each alias group.
   using MinMaxVectorPairVectorTy = SmallVector<MinMaxVectorPairTy, 4>;
 
+  /// Different backends for code generation.
+  enum BackendTy { Serial, OpenMP, CUDA, Undefined };
+
 private:
   friend class ScopBuilder;
 
@@ -1665,6 +1668,9 @@ private:
 
   /// The name of the SCoP (identical to the regions name)
   std::optional<std::string> name;
+
+  /// Backend for target Serial, OpenMP, CUDA
+  BackendTy Backend = Undefined;
 
   // Access functions of the SCoP.
   //
@@ -2048,6 +2054,33 @@ public:
     if (!name)
       name = R.getNameStr();
     return *name;
+  }
+
+  BackendTy getBackend() const { return Backend; }
+  StringRef getBackendStr() const {
+    switch (Backend) {
+    case Serial:
+      return "Serial";
+    case OpenMP:
+      return "OpenMP";
+    case CUDA:
+      return "CUDA";
+    case Undefined:
+      return "Undefined";
+    }
+
+    llvm_unreachable("Unknown backend");
+  }
+  void setBackend(BackendTy B) { Backend = B; }
+  void setBackendFromString(StringRef B) {
+    if (B == "Serial")
+      Backend = Serial;
+    else if (B == "OpenMP")
+      Backend = OpenMP;
+    else if (B == "CUDA")
+      Backend = CUDA;
+    else
+      llvm_unreachable("Unknown backend");
   }
 
   using array_iterator = ArrayInfoSetTy::iterator;

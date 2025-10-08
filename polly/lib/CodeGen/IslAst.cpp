@@ -165,7 +165,7 @@ static const std::string getBrokenReductionsStr(const isl::ast_node &Node) {
 /// Callback executed for each for node in the ast in order to print it.
 static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
                                __isl_take isl_ast_print_options *Options,
-                               __isl_keep isl_ast_node *Node, void *) {
+                               __isl_keep isl_ast_node *Node, void *User) {
   isl::pw_aff DD =
       IslAstInfo::getMinimalDependenceDistance(isl::manage_copy(Node));
   const std::string BrokenReductionsStr =
@@ -181,7 +181,9 @@ static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
   if (IslAstInfo::isInnermostParallel(isl::manage_copy(Node)))
     Printer = printLine(Printer, SimdPragmaStr + BrokenReductionsStr);
 
-  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node)))
+  bool OptPollyParallel = *((bool *)User);
+  if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node),
+                                       OptPollyParallel))
     Printer = printLine(Printer, OmpPragmaStr);
   else if (IslAstInfo::isOutermostParallel(isl::manage_copy(Node)))
     Printer = printLine(Printer, KnownParallelStr + BrokenReductionsStr);
@@ -457,11 +459,13 @@ static bool benefitsFromPolly(Scop &Scop, bool PerformParallelTest) {
 }
 
 /// Collect statistics for the syntax tree rooted at @p Ast.
-static void walkAstForStatistics(const isl::ast_node &Ast) {
+static void walkAstForStatistics(const isl::ast_node &Ast,
+                                 bool OptPollyParallel) {
   assert(!Ast.is_null());
   isl_ast_node_foreach_descendant_top_down(
       Ast.get(),
       [](__isl_keep isl_ast_node *Node, void *User) -> isl_bool {
+        bool OptPollyParallel = *((bool *)User);
         switch (isl_ast_node_get_type(Node)) {
         case isl_ast_node_for:
           NumForLoops++;
@@ -473,7 +477,8 @@ static void walkAstForStatistics(const isl::ast_node &Ast) {
             NumOutermostParallel++;
           if (IslAstInfo::isReductionParallel(isl::manage_copy(Node)))
             NumReductionParallel++;
-          if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node)))
+          if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node),
+                                               OptPollyParallel))
             NumExecutedInParallel++;
           break;
 
@@ -488,7 +493,7 @@ static void walkAstForStatistics(const isl::ast_node &Ast) {
         // Continue traversing subtrees.
         return isl_bool_true;
       },
-      nullptr);
+      &OptPollyParallel);
 }
 
 IslAst::IslAst(Scop &Scop) : S(Scop), Ctx(Scop.getSharedIslCtx()) {}
@@ -498,7 +503,9 @@ IslAst::IslAst(IslAst &&O)
       Root(std::move(O.Root)) {}
 
 void IslAst::init(const Dependences &D) {
-  bool PerformParallelTest = PollyParallel || DetectParallel ||
+  bool OptPollyParallel =
+      S.getBackend() == Scop::Undefined ? PollyParallel : S.getBackend() > 0;
+  bool PerformParallelTest = OptPollyParallel || DetectParallel ||
                              PollyVectorizerChoice != VECTORIZER_NONE;
   auto ScheduleTree = S.getScheduleTree();
 
@@ -546,13 +553,10 @@ void IslAst::init(const Dependences &D) {
 
   Root = isl::manage(
       isl_ast_build_node_from_schedule(Build, S.getScheduleTree().release()));
-  walkAstForStatistics(Root);
+
+  walkAstForStatistics(Root, OptPollyParallel);
 
   isl_ast_build_free(Build);
-
-  errs() << "schedule : " << ScheduleTree << "\n";
-  errs() << "ast : " << Root << "\n";
-  errs() << "ast :\n" << Root.to_C_str() << "\n";
 }
 
 IslAst IslAst::create(Scop &Scop, const Dependences &D) {
@@ -608,6 +612,27 @@ bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
          << "\tisOutermostParallel(Node) " << isOutermostParallel(Node)
          << "\tisReductionParallel(Node) " << isReductionParallel(Node) << "\n";
   if (!PollyParallel)
+    return false;
+
+  // Do not parallelize innermost loops.
+  //
+  // Parallelizing innermost loops is often not profitable, especially if
+  // they have a low number of iterations.
+  //
+  // TODO: Decide this based on the number of loop iterations that will be
+  //       executed. This can possibly require run-time checks, which again
+  //       raises the question of both run-time check overhead and code size
+  //       costs.
+  if (!PollyParallelForce &&
+      (isInnermost(Node) and not isOutermostParallel(Node)))
+    return false;
+
+  return isOutermostParallel(Node) && !isReductionParallel(Node);
+}
+
+bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node,
+                                      bool OptPollyParallel) {
+  if (!OptPollyParallel)
     return false;
 
   // Do not parallelize innermost loops.
@@ -753,7 +778,10 @@ void IslAstInfo::print(raw_ostream &OS) {
   if (PrintAccesses)
     Options =
         isl_ast_print_options_set_print_user(Options, cbPrintUser, nullptr);
-  Options = isl_ast_print_options_set_print_for(Options, cbPrintFor, nullptr);
+  bool OptPollyParallel =
+      S.getBackend() == Scop::Undefined ? PollyParallel : S.getBackend() > 0;
+  Options = isl_ast_print_options_set_print_for(Options, cbPrintFor,
+                                                &OptPollyParallel);
 
   isl_printer *P = isl_printer_to_str(S.getIslCtx().get());
   P = isl_printer_set_output_format(P, ISL_FORMAT_C);

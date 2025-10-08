@@ -147,6 +147,8 @@ public:
 
   /// Will the loop be run as thread parallel?
   static bool isExecutedInParallel(const isl::ast_node &Node);
+  static bool isExecutedInParallel(const isl::ast_node &Node,
+                                   bool PollyParallel);
 
   /// Get the nodes schedule or a nullptr if not available.
   static isl::union_map getSchedule(const isl::ast_node &Node);

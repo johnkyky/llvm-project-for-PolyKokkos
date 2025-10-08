@@ -3595,6 +3595,14 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   llvm::errs() << "region : " << R << "\n";
   scop.reset(new Scop(R, SE, LI, DT, *SD.getDetectionContext(&R), ORE,
                       SD.getNextID()));
+
+  if (scop->getFunction().hasFnAttribute("polly.backend")) {
+    StringRef Backend =
+        scop->getFunction().getFnAttribute("polly.backend").getValueAsString();
+    errs() << "Found backend attribute: " << Backend << "\n";
+    scop->setBackendFromString(Backend);
+  }
+
   llvm::errs() << "scop begin : " << *scop << "\n";
 
   buildStmts(R);

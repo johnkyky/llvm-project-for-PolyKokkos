@@ -232,16 +232,27 @@ bool moveInnerLoopLoad(Function &F) {
 }
 
 bool readBackend(Function &F) {
+  // Backend priority : Serial < OpenMP < CUDA
   auto AddBackendAttr = [](Function &F, StringRef Backend) {
+    if (Backend != "Serial" && Backend != "OpenMP" && Backend != "CUDA")
+      llvm_unreachable("Unknown backend annotation");
+
     if (not F.hasFnAttribute("polly.backend")) {
       F.addFnAttr("polly.backend", Backend);
       return;
     }
 
+    if (Backend == "CUDA")
+      return;
+
     Attribute Attr = F.getFnAttribute("polly.backend");
-    StringRef Value = Attr.getValueAsString();
-    std::string BackendList = Value.str() + "," + Backend.str();
-    F.addFnAttr("polly.backend", BackendList);
+    StringRef CurrentBackend = Attr.getValueAsString();
+    if ((CurrentBackend == "Serial" and
+         (Backend == "OpenMP" or Backend == "CUDA")) or
+        (CurrentBackend == "OpenMP" and Backend == "OpenMP")) {
+      F.addFnAttr("polly.backend", Backend);
+      return;
+    }
   };
 
   bool Changed = false;
