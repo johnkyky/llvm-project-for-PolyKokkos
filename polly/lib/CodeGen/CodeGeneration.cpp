@@ -85,8 +85,11 @@ void markBlockUnreachable(BasicBlock &Block, PollyIRBuilder &Builder) {
 } // namespace polly
 
 static void verifyGeneratedFunction(Scop &S, Function &F, IslAstInfo &AI) {
-  if (!Verify || !verifyFunction(F, &errs()))
+  if (!Verify || !verifyFunction(F, &errs())) {
+    errs() << "Function verified\n";
     return;
+  }
+  errs() << "Function did not verify\n";
 
   POLLY_DEBUG({
     errs() << "== ISL Codegen created an invalid function ==\n\n== The "
@@ -365,6 +368,7 @@ PreservedAnalyses CodeGenerationPass::run(Scop &S, ScopAnalysisManager &SAM,
   errs() << S.getSchedule() << "\n";
   errs() << S.getScheduleTree() << "\n";
   auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
+  AI.print(errs());
   if (generateCode(S, AI, AR.LI, AR.DT, AR.SE, AR.RI)) {
     U.invalidateScop(S);
     errs() << "la génération c'est bien passé\n";

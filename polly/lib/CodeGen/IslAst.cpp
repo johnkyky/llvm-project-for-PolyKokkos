@@ -550,6 +550,7 @@ void IslAst::init(const Dependences &D) {
   }
 
   RunCondition = buildRunCondition(S, isl::manage_copy(Build));
+  errs() << "RunCondition " << RunCondition.to_C_str() << "\n";
 
   Root = isl::manage(
       isl_ast_build_node_from_schedule(Build, S.getScheduleTree().release()));
@@ -605,7 +606,6 @@ bool IslAstInfo::isReductionParallel(const isl::ast_node &Node) {
 }
 
 bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
-  errs() << Node.to_C_str();
   errs() << "isExecutedInParallel " << "\tPollyParallel " << PollyParallel
          << "\tPollyParallelForce " << PollyParallelForce
          << "\tisInnermost(Node) " << isInnermost(Node)

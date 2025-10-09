@@ -851,8 +851,7 @@ bool ScopDetection::isInvariant(Value &Val, const Region &Reg,
   // Loads within the SCoP may read arbitrary values, need to hoist them. If
   // it is not hoistable, it will be rejected later, but here we assume it is
   // and that makes the value invariant.
-  if (auto LI = dyn_cast<LoadInst>(I)) {
-    errs() << "on ajoute " << *LI << "\n";
+  if (auto *const LI = dyn_cast<LoadInst>(I)) {
     Ctx.RequiredILS.insert(LI);
     return true;
   }
