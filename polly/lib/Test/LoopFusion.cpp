@@ -11,11 +11,14 @@
 
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
 #include <regex>
 #include <stack>
 #include <string>
@@ -28,9 +31,16 @@ using namespace polly;
 namespace {
 
 BasicBlock *getExitBlock(Function &F) {
-  // Assuming the exit block is the last block in the function.
-  // This may not always be true, but for this example, we assume it.
-  return &F.back();
+  SmallVector<BasicBlock *, 1> ExitBlocks;
+  for (auto &BB : F) {
+    auto *Term = BB.getTerminator();
+    if (isa<ReturnInst>(Term))
+      return &BB;
+  }
+
+  if (ExitBlocks.size() != 1)
+    llvm_unreachable("Function does not have a single exit block");
+  return ExitBlocks[0];
 }
 
 void implMoveBlock(Loop *L1, Loop *L2, BasicBlock *BlockToMove,
@@ -101,34 +111,53 @@ void moveBlockBetweenLoopsImpl(Loop *L1, Loop *L2) {
   std::vector<BasicBlock *> ToMove;
   Function *F = Start->getParent();
 
-  bool InRange = false;
-  for (auto &BB : *F) {
-    if (&BB == Start)
-      InRange = true;
-    if (&BB == End)
+  // errs() << "Start: " << *Start << "\n";
+  // errs() << "End: " << *End << "\n";
+  // errs() << "InsertionPoint: " << *InsertionPoint << "\n";
+
+  auto Size = [](llvm::succ_range R) {
+    return std::distance(R.begin(), R.end());
+  };
+
+  auto Succ = llvm::successors(Start);
+  ToMove.push_back(Start);
+
+  if (Size(Succ) != 1)
+    llvm_unreachable("Start block has multiple successors");
+
+  while (true) {
+    auto *Current = *Succ.begin();
+    if (Current == End)
       break;
-    if (InRange)
-      ToMove.push_back(&BB);
+
+    ToMove.push_back(Current);
+    Succ = llvm::successors(Current);
+
+    if (size(Succ) != 1)
+      llvm_unreachable("Intermediate block has multiple successors");
   }
 
   // for (auto *BB : ToMove) {
   //   errs() << "Block to move: " << *BB << "\n\n";
   // }
 
-  implMoveBlock(L1, L2, ToMove.front(), InsertionPoint);
-  implMoveBlock(L1, L2, ToMove.back(), InsertionPoint);
+  for (auto *BB : ToMove) {
+    if (L1->contains(BB) || L2->contains(BB))
+      llvm_unreachable("Block to move is inside one of the loops");
+    implMoveBlock(L1, L2, BB, InsertionPoint);
+  }
 }
 
 bool moveBlockBetweenLoops(const std::vector<Loop *> &Loops) {
-
-  if (Loops.size() != 2) {
+  if (Loops.size() < 2)
     return false;
+
+  for (size_t I = Loops.size() - 1; I >= 1; I--) {
+    Loop *L1 = Loops[I - 1];
+    Loop *L2 = Loops[I];
+    errs() << "move " << I - 1 << " and " << I << "\n";
+    moveBlockBetweenLoopsImpl(L1, L2);
   }
-
-  Loop *L1 = Loops[0];
-  Loop *L2 = Loops[1];
-
-  moveBlockBetweenLoopsImpl(L1, L2);
   return true;
 }
 
