@@ -12,16 +12,22 @@
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <charconv>
+#include <optional>
 #include <regex>
+#include <span>
 #include <stack>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -155,7 +161,6 @@ bool moveBlockBetweenLoops(const std::vector<Loop *> &Loops) {
   for (size_t I = Loops.size() - 1; I >= 1; I--) {
     Loop *L1 = Loops[I - 1];
     Loop *L2 = Loops[I];
-    errs() << "move " << I - 1 << " and " << I << "\n";
     moveBlockBetweenLoopsImpl(L1, L2);
   }
   return true;
@@ -411,13 +416,14 @@ bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
 
     for (size_t I = 1; I < Arrays.size(); ++I) {
       Arrays[I]->replaceAllUsesWith(FirstArray);
-      errs() << "Replacing " << *Arrays[I] << " with " << *FirstArray << "\n";
+      // errs() << "Replacing " << *Arrays[I] << " with " << *FirstArray <<
+      // "\n";
 
       auto &FirstArrayDataSizes = FirstArrayData.Sizes;
       auto &OtherArraySizes = Anno.Map.at(Arrays[I]).Sizes;
       for (size_t I = 0; I < FirstArrayDataSizes.size(); ++I) {
-        errs() << "Replacing size " << *OtherArraySizes[I] << " with "
-               << *FirstArrayDataSizes[I] << "\n";
+        // errs() << "Replacing size " << *OtherArraySizes[I] << " with "
+        //        << *FirstArrayDataSizes[I] << "\n";
         OtherArraySizes[I]->replaceAllUsesWith(FirstArrayDataSizes[I]);
       }
     }
@@ -439,6 +445,11 @@ struct PolicyBound {
   // IR
   Loop *L = nullptr;
   Instruction *InstBound = nullptr;
+
+  // If assumption set policy bound to a literal value
+  // we need to remember it here
+  bool IsLiteral = false;
+  long LiteralValue = 0;
 };
 using Variable = std::string;
 using Literal = long;
@@ -446,7 +457,15 @@ using Literal = long;
 using Operand = std::variant<PolicyBound, Variable, Literal>;
 
 struct Comparison {
-  enum class Operator { EQUAL, LESS, GREATER, LESS_EQUAL, GREATER_EQUAL };
+  enum class Operator {
+    UNKNOWN,
+    EQUAL,
+    NOT_EQUAL,
+    LESS,
+    GREATER,
+    LESS_EQUAL,
+    GREATER_EQUAL
+  };
   Operand LHS;
   Operator Op;
   Operand RHS;
@@ -460,9 +479,9 @@ std::string operandToString(const Operand &Operand) {
           return Arg.Policy + std::to_string(Arg.PolicyIndex) + "." +
                  Arg.BoundType + std::to_string(Arg.BoundIndex);
         } else if constexpr (std::is_same_v<T, Literal>) {
-          return std::to_string(Arg);
+          return "int" + std::to_string(Arg);
         } else {
-          return Arg;
+          return "variable" + Arg;
         }
       },
       Operand);
@@ -472,6 +491,8 @@ std::string operatorToString(const Comparison::Operator &Op) {
   switch (Op) {
   case Comparison::Operator::EQUAL:
     return "==";
+  case Comparison::Operator::NOT_EQUAL:
+    return "!=";
   case Comparison::Operator::LESS:
     return "<";
   case Comparison::Operator::GREATER:
@@ -480,12 +501,16 @@ std::string operatorToString(const Comparison::Operator &Op) {
     return "<=";
   case Comparison::Operator::GREATER_EQUAL:
     return ">=";
+  case Comparison::Operator::UNKNOWN:
+    return "??";
   }
 }
 
 Comparison::Operator stringToOperator(const std::string &OpStr) {
   if (OpStr == "==")
     return Comparison::Operator::EQUAL;
+  if (OpStr == "!=")
+    return Comparison::Operator::NOT_EQUAL;
   if (OpStr == "<")
     return Comparison::Operator::LESS;
   if (OpStr == ">")
@@ -494,8 +519,7 @@ Comparison::Operator stringToOperator(const std::string &OpStr) {
     return Comparison::Operator::LESS_EQUAL;
   if (OpStr == ">=")
     return Comparison::Operator::GREATER_EQUAL;
-
-  llvm_unreachable("Unknown operator: " + OpStr);
+  return Comparison::Operator::UNKNOWN;
 }
 
 std::string comparisonToString(const Comparison &C) {
@@ -503,76 +527,112 @@ std::string comparisonToString(const Comparison &C) {
          operandToString(C.RHS);
 }
 
-Operand parseOperand(const std::string &Token) {
-  std::regex PolicyRegex(R"(policy(\d+)\.(upper|lower)(\d+))");
-  std::regex IntRegex(R"(-?\d+)");
+std::optional<Operand> parseOperand(const std::string &S) {
+  static const std::regex PolicyRegex(
+      "(policy|p)(\\d+)\\.(lower|l|upper|u)(\\d+)");
   std::smatch Match;
 
-  if (std::regex_match(Token, Match, PolicyRegex)) {
-    return PolicyBound{"policy", std::stoul(Match[1]), Match[2].str(),
-                       std::stoul(Match[3])};
+  if (std::regex_match(S, Match, PolicyRegex)) {
+    std::string BoundTypeStr = Match[3].str();
+
+    if (BoundTypeStr == "l") {
+      BoundTypeStr = "lower";
+    } else if (BoundTypeStr == "u") {
+      BoundTypeStr = "upper";
+    }
+
+    return PolicyBound{"policy", (size_t)std::stoul(Match[2].str()),
+                       BoundTypeStr, (size_t)std::stoul(Match[4].str())};
   }
-  if (std::regex_match(Token, IntRegex)) {
-    return Literal{std::stoi(Token)};
+
+  long Val;
+  const char *StartPtr = S.data();
+  const char *EndPtr = S.data() + S.size();
+
+  auto Result = std::from_chars(StartPtr, EndPtr, Val);
+
+  if (Result.ec == std::errc() && Result.ptr == EndPtr) {
+    return Val;
   }
-  return Variable{Token};
+
+  static const std::regex VarRegex("[a-zA-Z_][a-zA-Z0-9_]*");
+  if (std::regex_match(S, VarRegex)) {
+    return S;
+  }
+
+  return std::nullopt;
 }
 
-std::vector<Comparison> parseComparisons(const std::string &Input) {
+std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
   std::vector<Comparison> Results;
 
-  std::regex Expr(R"(([\w\.]+)\s*(<=|>=|==|<|>)\s*([\-\w\.]+))");
-  auto Begin = std::sregex_iterator(Input.begin(), Input.end(), Expr);
-  auto End = std::sregex_iterator();
+  static const std::regex ComparisonRegex(
+      "\\s*([^,=\\!<>\\s]+)\\s*(==|!=|<=|>=|<|>)\\s*([^,\\s]+)\\s*");
 
-  for (auto I = Begin; I != End; ++I) {
-    Operand LHS = parseOperand((*I)[1]);
-    Comparison::Operator Op = stringToOperator((*I)[2]);
-    Operand RHS = parseOperand((*I)[3]);
-    Results.push_back({LHS, Op, RHS});
+  StringRef StrRef(AssumptionsStr);
+  SmallVector<StringRef, 4> ComparisonStrs;
+  StrRef.split(ComparisonStrs, ',');
+
+  for (StringRef CompStr : ComparisonStrs) {
+    if (CompStr.trim().empty())
+      continue;
+
+    std::string CompStdStr = CompStr.str();
+    std::smatch Match;
+
+    if (!std::regex_match(CompStdStr, Match, ComparisonRegex)) {
+      report_fatal_error("Invalid assumption format: '" + Twine(CompStdStr) +
+                         "'");
+    }
+
+    std::string LhsStr = Match[1].str();
+    std::string OpStr = Match[2].str();
+    std::string RhsStr = Match[3].str();
+
+    std::optional<Operand> LhsOpt = parseOperand(LhsStr);
+    if (!LhsOpt) {
+      report_fatal_error("Left assumption operand invalid: '" + Twine(LhsStr) +
+                         "'");
+    } else if (not std::holds_alternative<PolicyBound>(LhsOpt.value())) {
+      report_fatal_error("Left assumption must be a policy bound");
+    }
+
+    auto Op = stringToOperator(OpStr);
+    if (Op == Comparison::Operator::UNKNOWN) {
+      report_fatal_error("Invalid comparison operator: '" + Twine(OpStr) + "'");
+    }
+
+    std::optional<Operand> RhsOpt = parseOperand(RhsStr);
+    if (!RhsOpt) {
+      report_fatal_error("Right assumption operand invalid: '" + Twine(RhsStr) +
+                         "'");
+    }
+
+    if (std::holds_alternative<PolicyBound>(RhsOpt.value())) {
+      auto &LHSBound = std::get<PolicyBound>(LhsOpt.value());
+      auto &RHSBound = std::get<PolicyBound>(RhsOpt.value());
+      if (LHSBound.PolicyIndex == RHSBound.PolicyIndex and
+          LHSBound.BoundType == RHSBound.BoundType and
+          LHSBound.BoundIndex == RHSBound.BoundIndex) {
+        report_fatal_error("Left and right assumption policy bound must be "
+                           "different: '" +
+                           Twine(CompStdStr) + "'");
+      }
+    }
+
+    Comparison Comp;
+    Comp.LHS = LhsOpt.value();
+    Comp.Op = Op;
+    Comp.RHS = RhsOpt.value();
+
+    Results.push_back(Comp);
   }
 
   return Results;
 }
 
-// const SCEV *getLoopUpperBound(Instruction *Inst, Loop *L, ScalarEvolution
-// &SE) {
-//   errs() << "getLoopUpperBound\n";
-//   // Assure-toi que la boucle a une variable d'induction reconnue
-//   const auto *A = SE.getSCEV(Inst);
-//   if (A)
-//     errs() << "A " << *A << "\n";
-//   else
-//     errs() << "pas de A\n";
-//
-//   const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(A);
-//   if (not AR) {
-//     errs() << "  [!] Pas de SCEVAddRecExpr pour cette boucle.\n";
-//     return nullptr;
-//   }
-//
-//   errs() << "on est la 1\n";
-//   const SCEV *Start = AR->getStart();
-//   errs() << "on est la 2\n";
-//   const SCEV *Step = AR->getStepRecurrence(SE);
-//   errs() << "on est la 3\n";
-//   const SCEV *TripCount = SE.getBackedgeTakenCount(L);
-//
-//   errs() << "on est la \n";
-//
-//   if (TripCount == SE.getCouldNotCompute()) {
-//     errs() << "  [!] Impossible de déterminer le trip count.\n";
-//     return nullptr;
-//   }
-//
-//   // Calcul de : Start + Step * TripCount
-//   const SCEV *Bound = SE.getAddExpr(Start, SE.getMulExpr(Step, TripCount));
-//   return Bound;
-// }
-
-std::vector<Comparison>
-extractAssumption(Function &F, std::vector<Loop *> Loops,
-                  std::vector<LoopBoundT> &LoopBoundVec) {
+StringRef extractAssumptionAnnotation(Function &F, std::vector<Loop *> Loops,
+                                      std::vector<LoopBoundT> &LoopBoundVec) {
   StringRef AssumptionsStr;
   bool FindedAssumption = false;
   for (auto &BB : F) {
@@ -606,6 +666,12 @@ extractAssumption(Function &F, std::vector<Loop *> Loops,
       }
     }
   }
+  return AssumptionsStr;
+}
+
+std::vector<Comparison>
+parseAssumptions(StringRef AssumptionsStr, std::vector<Loop *> &Loops,
+                 std::vector<LoopBoundT> &LoopBoundVec) {
 
   auto ComparaisonVec = parseComparisons(AssumptionsStr.str());
 
@@ -676,36 +742,220 @@ extractAssumption(Function &F, std::vector<Loop *> Loops,
   // }
 }
 
-void applyAssumptions(Function &F, std::vector<Comparison> Assumptions) {
+void applyPolicyVsLiteral(Comparison &C, Function &F, AssumptionCache &AC,
+                          IRBuilder<> &Builder,
+                          std::vector<Comparison> &Assumptions);
 
-  for (auto &Assumption : Assumptions) {
-    errs() << "Applying assumption: " << operandToString(Assumption.LHS) << " "
-           << operatorToString(Assumption.Op) << " "
-           << operandToString(Assumption.RHS) << "\n";
+void applyPolicyVsPolicy(Comparison &C, Function &F, AssumptionCache &AC,
+                         IRBuilder<> &Builder,
+                         std::vector<Comparison> &Assumptions) {
+  auto &LHS = std::get<PolicyBound>(C.LHS);
+  auto &RHS = std::get<PolicyBound>(C.RHS);
 
-    if (std::holds_alternative<PolicyBound>(Assumption.LHS)) {
-      auto &LHS = std::get<PolicyBound>(Assumption.LHS);
-      auto &RHS = std::get<PolicyBound>(Assumption.RHS);
-
-      if (LHS.PolicyIndex > RHS.PolicyIndex)
-        std::swap(LHS, RHS);
-
-      auto *LHSInst = LHS.InstBound;
-      auto *RHSInst = RHS.InstBound;
-
-      if (LHSInst == nullptr or RHSInst == nullptr)
-        llvm_unreachable("LHSInst or RHSInst is null, skipping assumption.");
-
-      if (Assumption.Op == Comparison::Operator::EQUAL) {
-        errs() << "Replacing " << *RHSInst << " with " << *LHSInst << "\n";
-        RHSInst->replaceAllUsesWith(LHSInst);
-      } else {
-        llvm_unreachable("Operand not supported");
-      }
-    }
+  if (LHS.IsLiteral and RHS.IsLiteral) {
+    return;
   }
 
-  return;
+  if (LHS.IsLiteral) {
+    std::swap(C.LHS, C.RHS);
+    errs() << "On a un littéral à gauche, on swap\n";
+    applyPolicyVsLiteral(C, F, AC, Builder, Assumptions);
+    return;
+  }
+  if (RHS.IsLiteral) {
+    applyPolicyVsLiteral(C, F, AC, Builder, Assumptions);
+    return;
+  }
+
+  if (LHS.PolicyIndex > RHS.PolicyIndex)
+    std::swap(LHS, RHS);
+
+  auto *LHSInst = LHS.InstBound;
+  auto *RHSInst = RHS.InstBound;
+
+  if (!LHSInst || !RHSInst) {
+    llvm_unreachable("Instruction de borne nulle, la liaison a échoué.");
+  }
+
+  switch (C.Op) {
+  case Comparison::Operator::EQUAL: {
+    errs() << "Replacing " << *RHSInst << " with " << *LHSInst << "\n";
+    RHSInst->replaceAllUsesWith(LHSInst);
+
+    // Update other assumptions that reference RHSInst to use LHSInst
+    for (auto &OtherC : Assumptions) {
+      if (&OtherC == &C)
+        continue;
+      bool Updated = false;
+      if (std::holds_alternative<PolicyBound>(OtherC.LHS)) {
+        auto &OtherLHS = std::get<PolicyBound>(OtherC.LHS);
+        if (OtherLHS.InstBound == RHSInst) {
+          OtherLHS.InstBound = LHSInst;
+          Updated = true;
+        }
+      }
+      if (std::holds_alternative<PolicyBound>(OtherC.RHS)) {
+        auto &OtherRHS = std::get<PolicyBound>(OtherC.RHS);
+        if (OtherRHS.InstBound == RHSInst) {
+          OtherRHS.InstBound = LHSInst;
+          Updated = true;
+        }
+      }
+      if (Updated) {
+        errs() << "Updated related assumption: " << comparisonToString(OtherC)
+               << "\n";
+      }
+    }
+    break;
+  }
+  case Comparison::Operator::NOT_EQUAL:
+  case Comparison::Operator::LESS:
+  case Comparison::Operator::GREATER:
+  case Comparison::Operator::LESS_EQUAL:
+  case Comparison::Operator::GREATER_EQUAL: {
+    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ; // Init
+    if (C.Op == Comparison::Operator::NOT_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_NE;
+    if (C.Op == Comparison::Operator::LESS)
+      Pred = CmpInst::Predicate::ICMP_SLT; // Signed Less Than
+    if (C.Op == Comparison::Operator::GREATER)
+      Pred = CmpInst::Predicate::ICMP_SGT;
+    if (C.Op == Comparison::Operator::LESS_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SLE;
+    if (C.Op == Comparison::Operator::GREATER_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SGE;
+
+    Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
+    errs() << "Registering assumption: " << *Cmp << "\n";
+
+    AC.registerAssumption(cast<AssumeInst>(Cmp));
+    break;
+  }
+  default:
+    llvm_unreachable("Opérateur inconnu dans une comparaison validée.");
+  }
+}
+
+void applyPolicyVsLiteral(Comparison &C, Function &F, AssumptionCache &AC,
+                          IRBuilder<> &Builder,
+                          std::vector<Comparison> &Assumptions) {
+  auto &LHS = std::get<PolicyBound>(C.LHS);
+  auto &RHS = std::get<Literal>(C.RHS);
+
+  auto *BoundInst = LHS.InstBound;
+  if (!BoundInst)
+    llvm_unreachable("Instruction de borne nulle.");
+
+  Constant *ConstVal = ConstantInt::get(BoundInst->getType(), RHS);
+
+  switch (C.Op) {
+  case Comparison::Operator::EQUAL: {
+    errs() << "Replacing " << *BoundInst << " with constant " << *ConstVal
+           << "\n";
+    BoundInst->replaceAllUsesWith(ConstVal);
+    LHS.IsLiteral = true;
+    LHS.LiteralValue = RHS;
+
+    // Update other assumptions that reference BoundInst to use ConstVal
+    std::vector<std::vector<Comparison>::iterator> ToRemove;
+    for (auto It = Assumptions.begin(); It != Assumptions.end(); ++It) {
+      auto &OtherC = *It;
+      if (&OtherC == &C)
+        continue;
+      bool Updated = false;
+      if (std::holds_alternative<PolicyBound>(OtherC.LHS)) {
+        auto &OtherLHS = std::get<PolicyBound>(OtherC.LHS);
+        if (OtherLHS.InstBound == BoundInst) {
+          if (not std::holds_alternative<PolicyBound>(OtherC.RHS)) {
+            errs() << "push dans le vector " << comparisonToString(OtherC)
+                   << "\n";
+            ToRemove.push_back(It);
+            continue;
+          }
+
+          OtherC.LHS = RHS;
+          std::swap(OtherC.LHS, OtherC.RHS);
+          Updated = true;
+
+          errs() << "Replaced LHS in assumption with literal: "
+                 << comparisonToString(OtherC) << "\n";
+        }
+      }
+      if (std::holds_alternative<PolicyBound>(OtherC.RHS)) {
+        auto &OtherRHS = std::get<PolicyBound>(OtherC.RHS);
+        if (OtherRHS.InstBound == BoundInst) {
+          OtherC.RHS = RHS;
+          Updated = true;
+
+          errs() << "Replaced RHS in assumption with literal: "
+                 << comparisonToString(OtherC) << "\n";
+        }
+      }
+      if (Updated) {
+        errs() << "Updated related assumption: " << comparisonToString(OtherC)
+               << "\n";
+      }
+    }
+
+    for (auto &It : ToRemove) {
+      errs() << "Removing assumption: " << comparisonToString(*It) << "\n";
+      Assumptions.erase(It);
+    }
+
+    break;
+  }
+  case Comparison::Operator::NOT_EQUAL:
+  case Comparison::Operator::LESS:
+  case Comparison::Operator::GREATER:
+  case Comparison::Operator::LESS_EQUAL:
+  case Comparison::Operator::GREATER_EQUAL: {
+    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ;
+    if (C.Op == Comparison::Operator::NOT_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_NE;
+    if (C.Op == Comparison::Operator::LESS)
+      Pred = CmpInst::Predicate::ICMP_SLT;
+    if (C.Op == Comparison::Operator::GREATER)
+      Pred = CmpInst::Predicate::ICMP_SGT;
+    if (C.Op == Comparison::Operator::LESS_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SLE;
+    if (C.Op == Comparison::Operator::GREATER_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SGE;
+
+    Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
+    AC.registerAssumption(cast<AssumeInst>(Cmp));
+    errs() << "Registering assumption: " << *Cmp << "\n";
+    break;
+  }
+  default:
+    llvm_unreachable("Opérateur inconnu dans une comparaison validée.");
+  }
+}
+
+void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
+                      AssumptionCache &AC) {
+  IRBuilder<> Builder(&F.getEntryBlock(), F.getEntryBlock().begin());
+
+  for (auto &Assumption : Assumptions) {
+    errs() << "\n\nApplying assumption: " << comparisonToString(Assumption)
+           << "\n";
+
+    std::visit(
+        [&](auto &&LHS, auto &&RHS) {
+          using T1 = std::decay_t<decltype(LHS)>;
+          using T2 = std::decay_t<decltype(RHS)>;
+
+          if constexpr (std::is_same_v<T1, PolicyBound> &&
+                        std::is_same_v<T2, PolicyBound>) {
+            applyPolicyVsPolicy(Assumption, F, AC, Builder, Assumptions);
+          } else if constexpr (std::is_same_v<T1, PolicyBound> &&
+                               std::is_same_v<T2, Literal>) {
+            applyPolicyVsLiteral(Assumption, F, AC, Builder, Assumptions);
+          } else {
+            llvm_unreachable("Other combinations are not supported yet.");
+          }
+        },
+        Assumption.LHS, Assumption.RHS);
+  }
 }
 
 } // namespace
@@ -720,19 +970,19 @@ PreservedAnalyses LoopFusionPass::run(Function &F,
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto Loops = findLoop(F, AM.getResult<LoopAnalysis>(F), DT);
 
-  for (auto &L : Loops) {
-    errs() << "Loop found: " << *L << "\n";
-  }
+  // for (auto &L : Loops) {
+  //   errs() << "Loop found: " << *L << "\n";
+  // }
 
   auto LoopBoundVec = getLoopBoundInstructions(F, Loops, DT);
 
-  for (const auto LoopBound : LoopBoundVec) {
-    errs() << "Instruction de borne de boucle : " << *LoopBound.Inst << "   "
-           << (LoopBound.BoundType == LoopBoundT::Lower ? "Lower" : "Upper")
-           << "   " << LoopBound.Depth << "   "
-           << (LoopBound.L ? "boucle" : "pas boucle") << "   "
-           << LoopBound.IndexPolicy << "\n";
-  }
+  // for (const auto LoopBound : LoopBoundVec) {
+  //   errs() << "Instruction de borne de boucle : " << *LoopBound.Inst << "   "
+  //          << (LoopBound.BoundType == LoopBoundT::Lower ? "Lower" : "Upper")
+  //          << "   " << LoopBound.Depth << "   "
+  //          << (LoopBound.L ? "boucle" : "pas boucle") << "   "
+  //          << LoopBound.IndexPolicy << "\n";
+  // }
 
   removeLoopBoundConditions(F, LoopBoundVec);
 
@@ -743,14 +993,16 @@ PreservedAnalyses LoopFusionPass::run(Function &F,
 
   ///////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-  auto Assumptions = extractAssumption(F, Loops, LoopBoundVec);
+  auto AssumptionsStr = extractAssumptionAnnotation(F, Loops, LoopBoundVec);
+  auto Assumptions = parseAssumptions(AssumptionsStr, Loops, LoopBoundVec);
 
   errs() << "Contenu de la chaîne : \n";
   for (const auto &Cmp : Assumptions)
     errs() << operandToString(Cmp.LHS) << " " << operatorToString(Cmp.Op) << " "
            << operandToString(Cmp.RHS) << "\n";
 
-  applyAssumptions(F, Assumptions);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  applyAssumptions(F, Assumptions, AC);
 
   errs() << "LoopFusionPass pass done\n";
 
