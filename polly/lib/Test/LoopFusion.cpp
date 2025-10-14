@@ -21,6 +21,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <charconv>
 #include <optional>
 #include <regex>
@@ -373,13 +374,6 @@ bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
     NameToArray[Data.Name].push_back(Inst);
   }
 
-  for (auto &G : NameToArray) {
-    errs() << "Group[" << G.first << "]\n";
-    for (auto *Inst : G.second) {
-      errs() << "  Array: " << *Inst << "\n";
-    }
-  }
-
   // Sort the map in each group by their dominance relationship
   for (auto &[Name, Arrays] : NameToArray) {
     std::sort(Arrays.begin(), Arrays.end(),
@@ -396,13 +390,6 @@ bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
 
                 return DT.dominates(A, B);
               });
-  }
-
-  for (auto &G : NameToArray) {
-    errs() << "Group[" << G.first << "]\n";
-    for (auto *Inst : G.second) {
-      errs() << "  Array: " << *Inst << "\n";
-    }
   }
 
   // Replace all use of arrays and sizes with the first one in each group (first
@@ -450,6 +437,11 @@ struct PolicyBound {
   // we need to remember it here
   bool IsLiteral = false;
   long LiteralValue = 0;
+
+  bool operator==(const PolicyBound &Other) const {
+    return Policy == Other.Policy && PolicyIndex == Other.PolicyIndex &&
+           BoundType == Other.BoundType && BoundIndex == Other.BoundIndex;
+  }
 };
 using Variable = std::string;
 using Literal = long;
@@ -857,49 +849,34 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, AssumptionCache &AC,
     LHS.LiteralValue = RHS;
 
     // Update other assumptions that reference BoundInst to use ConstVal
-    std::vector<std::vector<Comparison>::iterator> ToRemove;
-    for (auto It = Assumptions.begin(); It != Assumptions.end(); ++It) {
+    auto Begin = std::find_if(
+        Assumptions.begin(), Assumptions.end(),
+        [&C](const Comparison &Assumption) { return &Assumption == &C; });
+    if (Begin != Assumptions.end())
+      Begin++;
+    for (auto It = Begin; It != Assumptions.end(); ++It) {
       auto &OtherC = *It;
-      if (&OtherC == &C)
-        continue;
       bool Updated = false;
-      if (std::holds_alternative<PolicyBound>(OtherC.LHS)) {
+      if (std::holds_alternative<PolicyBound>(OtherC.LHS) and
+          std::holds_alternative<PolicyBound>(OtherC.RHS)) {
         auto &OtherLHS = std::get<PolicyBound>(OtherC.LHS);
-        if (OtherLHS.InstBound == BoundInst) {
-          if (not std::holds_alternative<PolicyBound>(OtherC.RHS)) {
-            errs() << "push dans le vector " << comparisonToString(OtherC)
-                   << "\n";
-            ToRemove.push_back(It);
-            continue;
-          }
-
+        if (OtherLHS == LHS) {
           OtherC.LHS = RHS;
           std::swap(OtherC.LHS, OtherC.RHS);
           Updated = true;
-
-          errs() << "Replaced LHS in assumption with literal: "
-                 << comparisonToString(OtherC) << "\n";
         }
       }
       if (std::holds_alternative<PolicyBound>(OtherC.RHS)) {
         auto &OtherRHS = std::get<PolicyBound>(OtherC.RHS);
-        if (OtherRHS.InstBound == BoundInst) {
+        if (OtherRHS == LHS) {
           OtherC.RHS = RHS;
           Updated = true;
-
-          errs() << "Replaced RHS in assumption with literal: "
-                 << comparisonToString(OtherC) << "\n";
         }
       }
       if (Updated) {
         errs() << "Updated related assumption: " << comparisonToString(OtherC)
                << "\n";
       }
-    }
-
-    for (auto &It : ToRemove) {
-      errs() << "Removing assumption: " << comparisonToString(*It) << "\n";
-      Assumptions.erase(It);
     }
 
     break;
