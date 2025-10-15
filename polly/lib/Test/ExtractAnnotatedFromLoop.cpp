@@ -24,6 +24,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <stack>
 
 using namespace llvm;
 using namespace polly;
@@ -142,7 +144,26 @@ AnnotationData extractArrayInfo(Function &F) {
   return Anno;
 }
 
-bool extractLoopBoundAnnotation(Function &F) {
+BasicBlock *getExitBlock(Function &F) {
+  SmallVector<BasicBlock *, 1> ExitBlocks;
+  for (auto &BB : F) {
+    auto *Term = BB.getTerminator();
+    if (isa<ReturnInst>(Term))
+      return &BB;
+  }
+
+  if (ExitBlocks.size() != 1)
+    llvm_unreachable("Function does not have a single exit block");
+  return ExitBlocks[0];
+}
+
+bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
+  errs() << "on cherche les loop\n";
+  auto Loops = findLoop(F, LI, DT);
+  for (auto &L : Loops) {
+    errs() << "Loop found: " << *L << "\n";
+  }
+
   bool Res = false;
   for (auto &BB : F) {
     for (auto &I : BB) {
@@ -165,27 +186,34 @@ bool extractLoopBoundAnnotation(Function &F) {
                    << " : Bad annotation loop bound format ici\n";
           }
 
+          size_t PolicyIndex = 0;
           llvm::StringRef Kind;
           size_t Depth = 0;
-          if (StrRefParts[0] == "lower") {
+          if (StrRefParts[0] == "lower" or StrRefParts[0] == "upper") {
             Kind = StrRefParts[0];
-            Depth = 0;
             StrRefParts[2].getAsInteger(10, Depth);
-          } else if (StrRefParts[0] == "upper") {
-            Kind = StrRefParts[0];
-            Depth = 0;
-            StrRefParts[2].getAsInteger(10, Depth);
+
+            for (auto &L : Loops) {
+              if (DT.dominates(Inst->getParent(), L->getHeader())) {
+                break;
+              }
+              PolicyIndex++;
+            }
+
           } else {
             errs() << "ExtractAnnotatedFromLoop pass on " << F.getName()
                    << " : Bad annotation loop bound format\n";
           }
 
+          llvm::Metadata *PolicyIndexMetadata = llvm::ConstantAsMetadata::get(
+              llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), PolicyIndex));
           llvm::Metadata *BoundLoopKindMetadata =
               llvm::MDString::get(Ctx, Kind);
           llvm::Metadata *DepthLoopMetadata = llvm::ConstantAsMetadata::get(
-              llvm::ConstantInt::get(llvm::Type::getInt32Ty(Ctx), Depth));
+              llvm::ConstantInt::get(llvm::Type::getInt64Ty(Ctx), Depth));
           llvm::MDNode *Node = llvm::MDNode::get(
-              Ctx, {BoundLoopKindMetadata, DepthLoopMetadata});
+              Ctx,
+              {PolicyIndexMetadata, BoundLoopKindMetadata, DepthLoopMetadata});
           Inst->setMetadata("loop_bound_information", Node);
           Res = true;
         }
@@ -348,6 +376,43 @@ void ExtractAnnotatedSizesWrapperPass::print(raw_ostream &OS,
   Anno.print(OS);
 }
 
+SmallVector<Loop *, 2> polly::findLoop(Function &F, LoopInfo &LI,
+                                       DominatorTree &DT) {
+  std::set<Loop *> LoopsBetween;
+  std::set<BasicBlock *> Visited;
+  std::stack<BasicBlock *> Stack;
+  Stack.push(&F.getEntryBlock());
+  BasicBlock *ExitBlock = getExitBlock(F);
+
+  while (!Stack.empty()) {
+    BasicBlock *Curr = Stack.top();
+    Stack.pop();
+
+    if (!Visited.insert(Curr).second)
+      continue;
+
+    if (Loop *L = LI.getLoopFor(Curr)) {
+      while (L->getParentLoop())
+        L = L->getParentLoop();
+      LoopsBetween.insert(L);
+    }
+
+    if (Curr == ExitBlock)
+      continue;
+
+    for (BasicBlock *Succ : successors(Curr))
+      Stack.push(Succ);
+  }
+
+  auto LoopsVec =
+      SmallVector<Loop *, 2>(LoopsBetween.begin(), LoopsBetween.end());
+  std::sort(LoopsVec.begin(), LoopsVec.end(), [&](Loop *A, Loop *B) {
+    return DT.dominates(A->getHeader(), B->getHeader());
+  });
+
+  return LoopsVec;
+}
+
 PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
                                                 FunctionAnalysisManager &FM) {
   if (not F.hasFnAttribute("polly.findSCoP"))
@@ -357,7 +422,8 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
 
   bool Changed = false;
   Changed |= readBackend(F);
-  Changed |= extractLoopBoundAnnotation(F);
+  Changed |= extractLoopBoundAnnotation(F, FM.getResult<LoopAnalysis>(F),
+                                        FM.getResult<DominatorTreeAnalysis>(F));
   Changed |= moveInnerLoopLoad(F);
   if (F.hasFnAttribute("polly.backend")) {
     llvm::Attribute Attr = F.getFnAttribute("polly.backend");

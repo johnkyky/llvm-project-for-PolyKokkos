@@ -9,11 +9,47 @@
 #ifndef POLLY_LOOPFUSION_H
 #define POLLY_LOOPFUSION_H
 
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
+#include <utility>
 
 using namespace llvm;
 
 namespace polly {
+
+struct LoopBoundT {
+  enum Type { Lower, Upper };
+
+  Instruction *Inst = nullptr;
+  Type BoundType = Type::Lower;
+  size_t Depth = 0;
+  size_t IndexPolicy = 0;
+};
+
+struct LoopBoundAnalysisResult {
+  SmallVector<Loop *, 2> Loops;
+  SmallVector<LoopBoundT, 4> LoopBounds;
+};
+raw_ostream &operator<<(raw_ostream &OS, const SmallVector<LoopBoundT, 4> &LBA);
+
+class LoopBoundAnalysis : public AnalysisInfoMixin<LoopBoundAnalysis> {
+  friend AnalysisInfoMixin<LoopBoundAnalysis>;
+
+  static AnalysisKey Key;
+
+private:
+  BasicBlock *getExitBlock(Function &F);
+
+  SmallVector<LoopBoundT, 4> getLoopBoundInstructions(Function &F,
+                                                      DominatorTree &DT);
+
+public:
+  using Result = SmallVector<LoopBoundT, 4>;
+  Result run(Function &F, FunctionAnalysisManager &AM);
+};
 
 struct LoopFusionPass final : PassInfoMixin<LoopFusionPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

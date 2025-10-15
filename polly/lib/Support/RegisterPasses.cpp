@@ -48,6 +48,7 @@
 #include "polly/Test/ModulePassTest.h"
 #include "polly/Test/OpenSCoPExporter.h"
 #include "polly/Test/ScheduleOptimizer.h"
+#include "polly/Test/UserAssumptions.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
@@ -319,6 +320,7 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(CodePreparationPass());
   PM.addPass(ExtractAnnotatedFromLoop());
   PM.addPass(llvm::DCEPass());
+  PM.addPass(UserAssumptions());
   PM.addPass(LoopFusionPass());
   // PM.addPass(llvm::DCEPass());
   // PM.addPass(FunctionPassTest());

@@ -21,6 +21,7 @@ FUNCTION_ANALYSIS("polly-annoted-array", ExtractAnnotatedSizes())
 FUNCTION_ANALYSIS("polly-function-scops", ScopInfoAnalysis())
 FUNCTION_ANALYSIS("polly-analysis", ScopInfoAnalysis())
 FUNCTION_ANALYSIS("polly-analysis-function-test", AnalysisFunctionTest())
+FUNCTION_ANALYSIS("polly-loop-bound-analysis", LoopBoundAnalysis())
 #undef FUNCTION_ANALYSIS
 
 #ifndef FUNCTION_PASS

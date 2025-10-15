@@ -9,6 +9,7 @@
 #ifndef POLLY_EXTRACTANNOTATEDFROMLOOP_H
 #define POLLY_EXTRACTANNOTATEDFROMLOOP_H
 
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include <unordered_map>
@@ -75,6 +76,8 @@ public:
 
   void print(raw_ostream &OS, const Module *M = nullptr) const override;
 };
+
+SmallVector<Loop *, 2> findLoop(Function &F, LoopInfo &LI, DominatorTree &DT);
 
 struct ExtractAnnotatedFromLoop final
     : PassInfoMixin<ExtractAnnotatedFromLoop> {

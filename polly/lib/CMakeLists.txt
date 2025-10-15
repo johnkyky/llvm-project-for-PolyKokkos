@@ -97,6 +97,7 @@ add_llvm_pass_plugin(Polly
   Test/LoopFusion.cpp
   Test/OpenSCoPExporter.cpp
   Test/ScheduleOptimizer.cpp
+  Test/UserAssumptions.cpp
 
   ${POLLY_HEADER_FILES}
 
