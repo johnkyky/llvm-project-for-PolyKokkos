@@ -25,7 +25,6 @@
 #include <charconv>
 #include <optional>
 #include <regex>
-#include <span>
 #include <stack>
 #include <string>
 #include <utility>
@@ -116,7 +115,6 @@ void moveBlockBetweenLoopsImpl(Loop *L1, Loop *L2) {
   BasicBlock *End = L2->getHeader();
   BasicBlock *InsertionPoint = L1->getHeader();
   std::vector<BasicBlock *> ToMove;
-  Function *F = Start->getParent();
 
   // errs() << "Start: " << *Start << "\n";
   // errs() << "End: " << *End << "\n";
@@ -155,7 +153,7 @@ void moveBlockBetweenLoopsImpl(Loop *L1, Loop *L2) {
   }
 }
 
-bool moveBlockBetweenLoops(const std::vector<Loop *> &Loops) {
+bool moveBlockBetweenLoops(const SmallVector<Loop *, 2> &Loops) {
   if (Loops.size() < 2)
     return false;
 
@@ -167,7 +165,7 @@ bool moveBlockBetweenLoops(const std::vector<Loop *> &Loops) {
   return true;
 }
 
-std::vector<Loop *> findLoop(Function &F, LoopInfo &LI, DominatorTree &DT) {
+SmallVector<Loop *, 2> findLoop(Function &F, LoopInfo &LI, DominatorTree &DT) {
   std::set<Loop *> LoopsBetween;
   std::set<BasicBlock *> Visited;
   std::stack<BasicBlock *> Stack;
@@ -194,7 +192,8 @@ std::vector<Loop *> findLoop(Function &F, LoopInfo &LI, DominatorTree &DT) {
       Stack.push(Succ);
   }
 
-  auto LoopsVec = std::vector<Loop *>(LoopsBetween.begin(), LoopsBetween.end());
+  auto LoopsVec =
+      SmallVector<Loop *, 2>(LoopsBetween.begin(), LoopsBetween.end());
   std::sort(LoopsVec.begin(), LoopsVec.end(), [&](Loop *A, Loop *B) {
     return DT.dominates(A->getHeader(), B->getHeader());
   });
@@ -212,10 +211,10 @@ struct LoopBoundT {
   size_t IndexPolicy = 0;
 };
 
-std::vector<LoopBoundT> getLoopBoundInstructions(Function &F,
-                                                 std::vector<Loop *> &Loops,
-                                                 DominatorTree &DT) {
-  std::vector<LoopBoundT> LoopBoundVec;
+SmallVector<LoopBoundT, 4>
+getLoopBoundInstructions(Function &F, SmallVector<Loop *, 2> &Loops,
+                         DominatorTree &DT) {
+  SmallVector<LoopBoundT, 4> LoopBoundVec;
 
   // Read loop bound information from metadata
   for (auto &BB : F) {
@@ -312,7 +311,7 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Instruction *LeftOp,
 }
 
 void removeLoopBoundConditions(Function &F,
-                               const std::vector<LoopBoundT> LoopBounds) {
+                               const SmallVector<LoopBoundT, 4> LoopBounds) {
 
   for (auto &BB : F) {
     auto *Term = BB.getTerminator();
@@ -330,10 +329,10 @@ void removeLoopBoundConditions(Function &F,
         const auto *LHSInst = dyn_cast<Instruction>(LHS);
         const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-        auto ItLeft =
+        const auto *ItLeft =
             std::find_if(LoopBounds.begin(), LoopBounds.end(),
                          [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
-        auto ItRight =
+        const auto *ItRight =
             std::find_if(LoopBounds.begin(), LoopBounds.end(),
                          [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
 
@@ -623,8 +622,9 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
   return Results;
 }
 
-StringRef extractAssumptionAnnotation(Function &F, std::vector<Loop *> Loops,
-                                      std::vector<LoopBoundT> &LoopBoundVec) {
+StringRef
+extractAssumptionAnnotation(Function &F, SmallVector<Loop *, 2> Loops,
+                            SmallVector<LoopBoundT, 4> &LoopBoundVec) {
   StringRef AssumptionsStr;
   bool FindedAssumption = false;
   for (auto &BB : F) {
@@ -662,8 +662,8 @@ StringRef extractAssumptionAnnotation(Function &F, std::vector<Loop *> Loops,
 }
 
 std::vector<Comparison>
-parseAssumptions(StringRef AssumptionsStr, std::vector<Loop *> &Loops,
-                 std::vector<LoopBoundT> &LoopBoundVec) {
+parseAssumptions(StringRef AssumptionsStr, SmallVector<Loop *, 2> &Loops,
+                 SmallVector<LoopBoundT, 4> &LoopBoundVec) {
 
   auto ComparaisonVec = parseComparisons(AssumptionsStr.str());
 
@@ -899,8 +899,11 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, AssumptionCache &AC,
       Pred = CmpInst::Predicate::ICMP_SGE;
 
     Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
-    AC.registerAssumption(cast<AssumeInst>(Cmp));
-    errs() << "Registering assumption: " << *Cmp << "\n";
+    Value *Assumption = Builder.CreateAssumption(Cmp);
+
+    // AC.registerAssumption(cast<AssumeInst>(Assumption));
+    // errs() << "size " << AC.assumptions().size() << "\n";
+    errs() << "Registering assumption: " << *Assumption << "\n";
     break;
   }
   default:
