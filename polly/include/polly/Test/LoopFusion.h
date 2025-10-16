@@ -29,10 +29,6 @@ struct LoopBoundT {
   size_t IndexPolicy = 0;
 };
 
-struct LoopBoundAnalysisResult {
-  SmallVector<Loop *, 2> Loops;
-  SmallVector<LoopBoundT, 4> LoopBounds;
-};
 raw_ostream &operator<<(raw_ostream &OS, const SmallVector<LoopBoundT, 4> &LBA);
 
 class LoopBoundAnalysis : public AnalysisInfoMixin<LoopBoundAnalysis> {

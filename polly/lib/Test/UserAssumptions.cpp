@@ -546,20 +546,16 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   errs() << "UserAssumptions pass run on " << F.getName().str() << "\n";
 
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
-  // errs() << LBA << "\n";
+  errs() << LBA << "\n";
 
   auto AssumptionsStr = extractAssumptionAnnotation(F, LBA);
-  errs() << "AssumptionsStr = '" << AssumptionsStr << "\n";
   auto Assumptions = parseAssumptions(AssumptionsStr, LBA);
 
-  errs() << "Contenu de la chaîne : \n";
   for (const auto &Cmp : Assumptions)
-    errs() << operandToString(Cmp.LHS) << " " << operatorToString(Cmp.Op) << " "
-           << operandToString(Cmp.RHS) << "\n";
+    errs() << comparisonToString(Cmp) << "\n";
 
   applyAssumptions(F, Assumptions);
 
   errs() << "UserAssumptions pass done\n";
-
   return PreservedAnalyses::all();
 }

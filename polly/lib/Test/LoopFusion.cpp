@@ -16,13 +16,13 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <stack>
 #include <utility>
 #include <vector>
 
@@ -97,21 +97,16 @@ LoopBoundAnalysis::getLoopBoundInstructions(Function &F, DominatorTree &DT) {
 LoopBoundAnalysis::Result LoopBoundAnalysis::run(Function &F,
                                                  FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-
-  auto LoopBoundVec = getLoopBoundInstructions(F, DT);
-
-  return LoopBoundVec;
+  return getLoopBoundInstructions(F, DT);
 }
 
 raw_ostream &polly::operator<<(raw_ostream &OS,
                                const SmallVector<LoopBoundT, 4> &LBA) {
   for (const auto LoopBound : LBA) {
-    errs() << "Instruction de borne de boucle : " << *LoopBound.Inst << " "
-           << (LoopBound.BoundType == LoopBoundT::Lower ? "Lower" : "Upper")
-           << "   " << LoopBound.Depth << "   " << LoopBound.IndexPolicy
-           << "\n";
+    errs() << "Loop bound : " << "policy" << LoopBound.IndexPolicy << "."
+           << (LoopBound.BoundType == LoopBoundT::Lower ? "lower" : "upper")
+           << LoopBound.Depth << " -> " << *LoopBound.Inst << "\n";
   }
-
   return OS;
 }
 
@@ -123,8 +118,6 @@ void implMoveBlock(Loop *L1, Loop *L2, BasicBlock *BlockToMove,
     // Check if blocks have multi predecessor/successor blocks and chose the
     // outside loop block
     if (std::distance(Blocks.begin(), Blocks.end()) == 1) {
-      // errs() << "Only one block found, returning it: " << **Blocks.begin()
-      //        << "\n";
       return *Blocks.begin();
     }
     for (auto *Block : Blocks) {
@@ -255,13 +248,54 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Instruction *LeftOp,
     break;
   }
   default:
-    return nullptr;
+    break;
   }
-  return nullptr;
+  report_fatal_error("Invalid loop bound condition");
+}
+
+unsigned getValidCondition(const Instruction *LeftOp,
+                           ICmpInst::Predicate Predica,
+                           const Instruction *RightOp) {
+  switch (Predica) {
+  case ICmpInst::ICMP_ULT: {
+    const auto *LeftMD = LeftOp->getMetadata("loop_bound_information");
+    MDString *LeftMDStr = dyn_cast<MDString>(LeftMD->getOperand(1));
+    const auto LeftBoundKind = LeftMDStr->getString();
+
+    const auto *RightMD = RightOp->getMetadata("loop_bound_information");
+    MDString *RightMDStr = dyn_cast<MDString>(RightMD->getOperand(1));
+    const auto RightBoundKind = RightMDStr->getString();
+
+    if (LeftBoundKind == "lower" && RightBoundKind == "upper") {
+      return 1;
+    }
+    if (LeftBoundKind == "upper" && RightBoundKind == "lower") {
+      return 2;
+    }
+    break;
+  }
+  default:
+    break;
+  }
+  report_fatal_error("Invalid loop bound condition");
 }
 
 void removeLoopBoundConditions(Function &F,
                                const SmallVector<LoopBoundT, 4> LoopBounds) {
+
+  auto CheckInstInLoopBounds = [&](const Instruction *LHSInst,
+                                   const Instruction *RHSInst) {
+    const auto *ItLeft =
+        std::find_if(LoopBounds.begin(), LoopBounds.end(),
+                     [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
+    const auto *ItRight =
+        std::find_if(LoopBounds.begin(), LoopBounds.end(),
+                     [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
+
+    if (not(ItLeft != LoopBounds.end() and ItRight != LoopBounds.end()))
+      return false;
+    return true;
+  };
 
   for (auto &BB : F) {
     auto *Term = BB.getTerminator();
@@ -279,24 +313,49 @@ void removeLoopBoundConditions(Function &F,
         const auto *LHSInst = dyn_cast<Instruction>(LHS);
         const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-        const auto *ItLeft =
-            std::find_if(LoopBounds.begin(), LoopBounds.end(),
-                         [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
-        const auto *ItRight =
-            std::find_if(LoopBounds.begin(), LoopBounds.end(),
-                         [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
-
-        if (not(ItLeft != LoopBounds.end() and ItRight != LoopBounds.end()))
+        if (not CheckInstInLoopBounds(LHSInst, RHSInst))
           continue;
 
         auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
 
         BranchInst::Create(NextBB, Branch);
         Branch->eraseFromParent();
-      }
+      } else if (auto *Select = dyn_cast<SelectInst>(Cond)) {
+        unsigned IndexOp = 0;
+        if (auto *ICmp = dyn_cast<ICmpInst>(Select->getCondition())) {
+          Value *LHS = ICmp->getOperand(0);
+          Value *RHS = ICmp->getOperand(1);
+          ICmpInst::Predicate Pred = ICmp->getPredicate();
+
+          const auto *LHSInst = dyn_cast<Instruction>(LHS);
+          const auto *RHSInst = dyn_cast<Instruction>(RHS);
+
+          if (not CheckInstInLoopBounds(LHSInst, RHSInst))
+            continue;
+
+          IndexOp = getValidCondition(LHSInst, Pred, RHSInst);
+        }
+        if (IndexOp == 0)
+          continue;
+        if (auto *ICmp = dyn_cast<ICmpInst>(Select->getOperand(IndexOp))) {
+          Value *LHS = ICmp->getOperand(0);
+          Value *RHS = ICmp->getOperand(1);
+          ICmpInst::Predicate Pred = ICmp->getPredicate();
+
+          const auto *LHSInst = dyn_cast<Instruction>(LHS);
+          const auto *RHSInst = dyn_cast<Instruction>(RHS);
+
+          if (not CheckInstInLoopBounds(LHSInst, RHSInst))
+            continue;
+
+          auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
+          BranchInst::Create(NextBB, Branch);
+          Branch->eraseFromParent();
+        }
+      } else
+        report_fatal_error("Unknown branch condition type");
     }
   }
-
   return;
 }
 
@@ -341,8 +400,8 @@ bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
               });
   }
 
-  // Replace all use of arrays and sizes with the first one in each group (first
-  // by dominance)
+  // Replace all use of arrays and sizes with the first one in each group
+  // (first by dominance)
   for (const auto &[Name, Arrays] : NameToArray) {
     if (Arrays.size() == 1)
       continue;
@@ -352,14 +411,10 @@ bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
 
     for (size_t I = 1; I < Arrays.size(); ++I) {
       Arrays[I]->replaceAllUsesWith(FirstArray);
-      // errs() << "Replacing " << *Arrays[I] << " with " << *FirstArray <<
-      // "\n";
 
       auto &FirstArrayDataSizes = FirstArrayData.Sizes;
       auto &OtherArraySizes = Anno.Map.at(Arrays[I]).Sizes;
       for (size_t I = 0; I < FirstArrayDataSizes.size(); ++I) {
-        // errs() << "Replacing size " << *OtherArraySizes[I] << " with "
-        //        << *FirstArrayDataSizes[I] << "\n";
         OtherArraySizes[I]->replaceAllUsesWith(FirstArrayDataSizes[I]);
       }
     }
@@ -378,8 +433,6 @@ PreservedAnalyses LoopFusionPass::run(Function &F,
   errs() << "LoopFusionPass pass run on " << F.getName() << "\n";
 
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
-  errs() << "LBA \n" << LBA << "\n";
-
   removeLoopBoundConditions(F, LBA);
 
   auto Loops = findLoop(F, AM.getResult<LoopAnalysis>(F),
