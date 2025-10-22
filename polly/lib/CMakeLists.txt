@@ -98,6 +98,7 @@ add_llvm_pass_plugin(Polly
   Test/OpenSCoPExporter.cpp
   Test/ScheduleOptimizer.cpp
   Test/UserAssumptions.cpp
+  Test/CheckParallelism.cpp
 
   ${POLLY_HEADER_FILES}
 

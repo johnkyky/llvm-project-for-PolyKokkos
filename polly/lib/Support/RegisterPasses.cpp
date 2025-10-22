@@ -39,6 +39,7 @@
 #include "polly/Simplify.h"
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
+#include "polly/Test/CheckParallelism.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/FunctionMarkedInliner.h"
 #include "polly/Test/FunctionPassTest.h"
@@ -212,6 +213,12 @@ static cl::opt<bool> EnablePruneUnprofitable(
     cl::desc("Bail out on unprofitable SCoPs before rescheduling"), cl::Hidden,
     cl::init(true), cl::cat(PollyCategory));
 
+static cl::opt<bool> KokkosCheckParallelism(
+    "polly-kokkos-check-parallelism",
+    cl::desc("Check if kokkos parallel kernels are parallel as written in the "
+             "code"),
+    cl::Hidden, cl::init(true), cl::cat(PollyCategory));
+
 namespace {
 
 /// Initialize Polly passes when library is loaded.
@@ -365,6 +372,10 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
 
   if (EnablePruneUnprofitable)
     SPM.addPass(PruneUnprofitablePass());
+
+  if (KokkosCheckParallelism) {
+    SPM.addPass(CheckParallelismPass());
+  }
 
   switch (Optimizer) {
   case OPTIMIZER_NONE:
