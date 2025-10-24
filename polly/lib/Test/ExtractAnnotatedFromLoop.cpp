@@ -336,6 +336,14 @@ bool readBackend(Function &F) {
                     continue;
                   }
                 }
+              } else if (auto *CDS = dyn_cast<ConstantDataSequential>(
+                             GV->getInitializer())) {
+                if (CDS->isString()) {
+                  StringRef Str = CDS->getAsCString();
+                  AddBackendAttr(F, Str);
+                  Changed = true;
+                  continue;
+                }
               }
             }
           }

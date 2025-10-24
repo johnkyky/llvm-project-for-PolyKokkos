@@ -85,10 +85,9 @@ void markBlockUnreachable(BasicBlock &Block, PollyIRBuilder &Builder) {
 } // namespace polly
 
 static void verifyGeneratedFunction(Scop &S, Function &F, IslAstInfo &AI) {
-  if (!Verify || !verifyFunction(F, &errs())) {
-    errs() << "Function verified\n";
+  if (!Verify || !verifyFunction(F, &errs()))
     return;
-  }
+
   errs() << "Function did not verify\n";
 
   POLLY_DEBUG({
