@@ -221,7 +221,6 @@ struct FunctionToScopPassAdaptor final
   explicit FunctionToScopPassAdaptor(ScopPassT Pass) : Pass(std::move(Pass)) {}
 
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
-    llvm::errs() << "FunctionToScopPassAdaptor run on " << F.getName() << "\n";
     ScopDetection &SD = AM.getResult<ScopAnalysis>(F);
     ScopInfo &SI = AM.getResult<ScopInfoAnalysis>(F);
     if (SI.empty()) {
@@ -233,7 +232,6 @@ struct FunctionToScopPassAdaptor final
       PA.abandon<ScopInfoAnalysis>();
       PA.abandon<ScopAnalysis>();
       AM.invalidate(F, PA);
-      llvm::errs() << "FunctionToScopPassAdaptor done because no scops\n\n\n";
       return PreservedAnalyses::all();
     }
 
@@ -280,7 +278,6 @@ struct FunctionToScopPassAdaptor final
     // invalidated), it is not sufficient for other purposes. For instance,
     // CodeGeneration does not inform LoopInfo about new loops in the
     // Polly-generated IR.
-    llvm::errs() << "FunctionToScopPassAdaptor done\n\n\n";
     return PreservedAnalyses::none();
   }
 

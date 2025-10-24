@@ -550,7 +550,6 @@ void IslAst::init(const Dependences &D) {
   }
 
   RunCondition = buildRunCondition(S, isl::manage_copy(Build));
-  errs() << "RunCondition " << RunCondition.to_C_str() << "\n";
 
   Root = isl::manage(
       isl_ast_build_node_from_schedule(Build, S.getScheduleTree().release()));
