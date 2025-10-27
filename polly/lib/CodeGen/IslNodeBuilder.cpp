@@ -673,7 +673,7 @@ void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
   auto Cond = false;
   if (S.getBackend() != Scop::BackendTy::Undefined)
     Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For),
-                                            S.getBackend() > 0);
+                                            S.getBackend() > Scop::Serial);
   else
     Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For));
 

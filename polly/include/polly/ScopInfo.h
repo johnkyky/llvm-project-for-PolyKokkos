@@ -23,6 +23,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/RegionPass.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Instruction.h"
@@ -30,6 +31,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "isl/isl-noexceptions.h"
 #include <cassert>
 #include <cstddef>
@@ -1644,7 +1646,7 @@ public:
   using MinMaxVectorPairVectorTy = SmallVector<MinMaxVectorPairTy, 4>;
 
   /// Different backends for code generation.
-  enum BackendTy { Serial, OpenMP, CUDA, Undefined };
+  enum BackendTy { Undefined, Serial, OpenMP, CUDA };
 
 private:
   friend class ScopBuilder;
@@ -2072,15 +2074,20 @@ public:
     llvm_unreachable("Unknown backend");
   }
   void setBackend(BackendTy B) { Backend = B; }
-  void setBackendFromString(StringRef B) {
-    if (B == "Serial")
+  void setBackendFromString(std::string B) {
+    if (B == "Serial") {
+      errs() << "on rentre bien la SERIAL" << B << "\n";
       Backend = Serial;
-    else if (B == "OpenMP")
+    } else if (B == "OpenMP") {
+      errs() << "on rentre bien la OpenMP " << B << "\n";
       Backend = OpenMP;
-    else if (B == "CUDA")
+    } else if (B == "CUDA") {
+      errs() << "on rentre bien la CUDA " << B << "\n";
       Backend = CUDA;
-    else
-      llvm_unreachable("Unknown backend");
+    } else {
+      errs() << "on rentre bien la UNDEFINED " << B << "\n";
+      Backend = Undefined;
+    }
   }
 
   using array_iterator = ArrayInfoSetTy::iterator;

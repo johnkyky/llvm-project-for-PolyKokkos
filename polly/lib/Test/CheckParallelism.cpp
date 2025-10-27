@@ -11,6 +11,7 @@
 
 #include "polly/Test/CheckParallelism.h"
 #include "polly/CodeGen/IslAst.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "isl/ast.h"
 
@@ -28,8 +29,8 @@ bool visiteMark(__isl_take isl_ast_node *Node, Scop &S) {
 }
 
 bool visiteFor(__isl_take isl_ast_node *For, Scop &S, unsigned Depth) {
-  bool IsParallel = IslAstInfo::isExecutedInParallel(isl::manage_copy(For),
-                                                     S.getBackend() > 0);
+  bool IsParallel = IslAstInfo::isExecutedInParallel(
+      isl::manage_copy(For), S.getBackend() > Scop::Serial);
 
   isl_ast_node_free(For);
 
@@ -93,9 +94,10 @@ bool visite(__isl_take isl_ast_node *Node, Scop &S, unsigned Depth) {
 PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
                                             ScopStandardAnalysisResults &AR,
                                             SPMUpdater &) {
-  if (S.getBackend() == Scop::BackendTy::Undefined or
-      S.getBackend() == Scop::BackendTy::Serial) {
-    errs() << "CheckParallelismPass: Scop has no parallel backend\n";
+  if (S.getBackend() == Scop::BackendTy::Undefined)
+    report_fatal_error("CheckParallelismPass: Scop has no backend\n");
+  if (S.getBackend() == Scop::BackendTy::Serial) {
+    errs() << "CheckParallelismPass: Scop has Serial backend\n";
     return PreservedAnalyses::all();
   }
 

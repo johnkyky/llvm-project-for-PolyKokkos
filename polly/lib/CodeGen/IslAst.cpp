@@ -503,8 +503,9 @@ IslAst::IslAst(IslAst &&O)
       Root(std::move(O.Root)) {}
 
 void IslAst::init(const Dependences &D) {
-  bool OptPollyParallel =
-      S.getBackend() == Scop::Undefined ? PollyParallel : S.getBackend() > 0;
+  bool OptPollyParallel = S.getBackend() == Scop::Undefined
+                              ? PollyParallel
+                              : S.getBackend() > Scop::Serial;
   bool PerformParallelTest = OptPollyParallel || DetectParallel ||
                              PollyVectorizerChoice != VECTORIZER_NONE;
   auto ScheduleTree = S.getScheduleTree();
@@ -777,8 +778,9 @@ void IslAstInfo::print(raw_ostream &OS) {
   if (PrintAccesses)
     Options =
         isl_ast_print_options_set_print_user(Options, cbPrintUser, nullptr);
-  bool OptPollyParallel =
-      S.getBackend() == Scop::Undefined ? PollyParallel : S.getBackend() > 0;
+  bool OptPollyParallel = S.getBackend() == Scop::Undefined
+                              ? PollyParallel
+                              : S.getBackend() > Scop::Serial;
   Options = isl_ast_print_options_set_print_for(Options, cbPrintFor,
                                                 &OptPollyParallel);
 

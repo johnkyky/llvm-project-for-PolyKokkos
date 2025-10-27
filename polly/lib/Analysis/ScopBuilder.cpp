@@ -3597,8 +3597,9 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
                       SD.getNextID()));
 
   if (scop->getFunction().hasFnAttribute("polly.backend")) {
-    StringRef Backend =
-        scop->getFunction().getFnAttribute("polly.backend").getValueAsString();
+    auto BackendAttr = scop->getFunction().getFnAttribute("polly.backend");
+    std::string Backend = BackendAttr.getValueAsString().str();
+
     errs() << "Found backend attribute: " << Backend << "\n";
     scop->setBackendFromString(Backend);
   }

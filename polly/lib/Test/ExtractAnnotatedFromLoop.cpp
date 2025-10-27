@@ -26,6 +26,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <stack>
+#include <string>
 
 using namespace llvm;
 using namespace polly;
@@ -261,7 +262,7 @@ bool moveInnerLoopLoad(Function &F) {
 
 bool readBackend(Function &F) {
   // Backend priority : Serial < OpenMP < CUDA
-  auto AddBackendAttr = [](Function &F, StringRef Backend) {
+  auto AddBackendAttr = [](Function &F, std::string Backend) {
     if (Backend != "Serial" && Backend != "OpenMP" && Backend != "CUDA")
       llvm_unreachable("Unknown backend annotation");
 
@@ -306,7 +307,7 @@ bool readBackend(Function &F) {
                       if (CS->getNumOperands() == 1) {
                         if (auto *CA = dyn_cast<ConstantDataArray>(
                                 CS->getOperand(0))) {
-                          StringRef Str = CA->getAsCString();
+                          std::string Str = CA->getAsCString().str();
                           AddBackendAttr(F, Str);
                           Changed = true;
                           continue;
@@ -330,7 +331,7 @@ bool readBackend(Function &F) {
                 Value *FirstElem = StructInit->getOperand(0);
                 if (auto *Array = dyn_cast<ConstantDataArray>(FirstElem)) {
                   if (Array->isCString()) {
-                    StringRef Str = Array->getAsCString();
+                    std::string Str = Array->getAsCString().str();
                     AddBackendAttr(F, Str);
                     Changed = true;
                     continue;
@@ -339,7 +340,7 @@ bool readBackend(Function &F) {
               } else if (auto *CDS = dyn_cast<ConstantDataSequential>(
                              GV->getInitializer())) {
                 if (CDS->isString()) {
-                  StringRef Str = CDS->getAsCString();
+                  std::string Str = CDS->getAsCString().str();
                   AddBackendAttr(F, Str);
                   Changed = true;
                   continue;
