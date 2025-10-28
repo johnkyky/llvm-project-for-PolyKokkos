@@ -362,7 +362,6 @@ enum class EquationType { Equality, Inequality };
 template <EquationType T>
 __isl_give isl_mat *extractEquationsOSL(isl::ctx Ctx, osl_relation_p Relation) {
   int NbCol = Relation->nb_columns;
-  int NbRow = Relation->nb_rows;
 
   std::vector<int> RowIndexes;
   for (int I = 0; I < Relation->nb_rows; I++) {
@@ -382,14 +381,14 @@ __isl_give isl_mat *extractEquationsOSL(isl::ctx Ctx, osl_relation_p Relation) {
   if (RowIndexes.empty())
     return Eq;
 
-  for (int I = 0; I < NbRow; ++I) {
+  for (size_t I = 0; I < RowIndexes.size(); ++I) {
     for (int J = 0; J < NbCol - 1; ++J) {
       isl::val V = isl::val(Ctx, 0);
       Eq = isl_mat_set_element_val(Eq, I, J, V.release());
     }
   }
 
-  for (int I = 0; I < NbRow; ++I) {
+  for (size_t I = 0; I < RowIndexes.size(); ++I) {
     for (int J = 0; J < NbCol - 1; ++J) {
       int Row = RowIndexes[I];
       long Val = osl_int_get_si(Relation->precision, Relation->m[Row][1 + J]);

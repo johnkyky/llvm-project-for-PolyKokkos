@@ -93,5 +93,5 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
 
   OpenSCoPImportPass::importOpenScop(S, FileNameOutput);
 
-  return PreservedAnalyses::all();
+  return PreservedAnalyses::none();
 }
