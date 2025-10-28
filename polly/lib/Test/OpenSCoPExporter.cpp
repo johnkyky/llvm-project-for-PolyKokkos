@@ -257,16 +257,17 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
   for (auto *MA : Stmt) {
     osl_relation_list_p A = osl_relation_list_malloc();
 
-    auto AccessMap = MA->getAccessRelation();
+    isl::map AccessMap = MA->getAccessRelation();
     std::vector<std::vector<long long>> Matrix3;
     isl::basic_map_list BasicAccessMapList = AccessMap.get_basic_map_list();
 
     BasicAccessMapList.foreach ([&](isl::basic_map BM) -> isl::stat {
-      std::vector<long long> Row(2 + 1 /* Array*/ + MA->getNumSubscripts() +
+      std::vector<long long> Row(2 + 1 /* Array*/ +
+                                     extractDimValue(AccessMap, isl::dim::out) +
                                      NbAccessInputDims + NbAccessParams,
                                  0);
 
-      auto ArrayName = MA->getScopArrayInfo()->getName();
+      auto ArrayName = AccessMap.get_tuple_id(isl::dim::out).get_name();
       Row[1] = -1;
       Row[Row.size() - 1] = ArraysNameToId[ArrayName];
       Matrix3.push_back(std::move(Row));
@@ -279,11 +280,13 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
     });
 
     A->elt = osl_relation_malloc(Matrix3.size(),
-                                 2 + 1 /* Array*/ + MA->getNumSubscripts() +
+                                 2 + 1 /* Array*/ +
+                                     extractDimValue(AccessMap, isl::dim::out) +
                                      NbAccessInputDims + NbAccessParams);
     A->elt->type = MA->isRead() ? OSL_TYPE_READ : OSL_TYPE_WRITE;
     A->elt->precision = OSL_PRECISION_DP;
-    A->elt->nb_output_dims = 1 /* Array*/ + MA->getNumSubscripts();
+    A->elt->nb_output_dims =
+        1 /* Array*/ + extractDimValue(AccessMap, isl::dim::out);
     A->elt->nb_input_dims = NbAccessInputDims;
     A->elt->nb_local_dims = 0;
     A->elt->nb_parameters = NbAccessParams;
