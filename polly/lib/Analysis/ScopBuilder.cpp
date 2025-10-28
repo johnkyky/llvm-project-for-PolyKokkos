@@ -2069,10 +2069,6 @@ void ScopBuilder::buildEqivClassBlockStmts(BasicBlock *BB) {
 }
 
 void ScopBuilder::buildStmts(Region &SR) {
-  llvm::errs() << "buildStmts function\n";
-  std::string AffineStr =
-      scop->isNonAffineSubRegion(&SR) ? "No affine" : "Affine";
-  llvm::errs() << "\tregion " << AffineStr << " -> " << SR << "\n";
   if (scop->isNonAffineSubRegion(&SR)) {
     std::vector<Instruction *> Instructions;
     Loop *SurroundingLoop =
@@ -2104,7 +2100,6 @@ void ScopBuilder::buildStmts(Region &SR) {
       }
     }
   }
-  llvm::errs() << "\tbuildStmts end function for " << SR << "\n";
 }
 
 void ScopBuilder::buildAccessFunctions(ScopStmt *Stmt, BasicBlock &BB,

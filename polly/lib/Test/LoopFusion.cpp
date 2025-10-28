@@ -358,71 +358,6 @@ void removeLoopBoundConditions(Function &F,
   }
   return;
 }
-
-bool fusionSameArrays(Function &F, ExtractAnnotatedSizes::Result &Anno,
-                      DominatorTree &DT) {
-  bool Res = false;
-
-  for (auto &[InstArray, Data] : Anno) {
-    auto *MDStr = MDString::get(InstArray->getContext(), Data.Name);
-    MDNode *MD = MDNode::get(InstArray->getContext(), {MDStr});
-    InstArray->setMetadata("name", MD);
-    Res = true;
-  }
-
-  /////////
-
-  using NameToInstructionsT =
-      llvm::DenseMap<llvm::StringRef, std::vector<Instruction *>>;
-
-  NameToInstructionsT NameToArray;
-
-  // Fill map with instructions grouped by name
-  for (const auto &[Inst, Data] : Anno) {
-    NameToArray[Data.Name].push_back(Inst);
-  }
-
-  // Sort the map in each group by their dominance relationship
-  for (auto &[Name, Arrays] : NameToArray) {
-    std::sort(Arrays.begin(), Arrays.end(),
-              [&](Instruction *A, Instruction *B) {
-                if (A->getParent() == B->getParent()) {
-                  for (Instruction &I : *A->getParent()) {
-                    if (&I == A)
-                      return true;
-                    if (&I == B)
-                      return false;
-                  }
-                  errs() << "Instructions not found in their parent block!\n";
-                }
-
-                return DT.dominates(A, B);
-              });
-  }
-
-  // Replace all use of arrays and sizes with the first one in each group
-  // (first by dominance)
-  for (const auto &[Name, Arrays] : NameToArray) {
-    if (Arrays.size() == 1)
-      continue;
-
-    auto &FirstArray = Arrays.front();
-    auto &FirstArrayData = Anno.Map[FirstArray];
-
-    for (size_t I = 1; I < Arrays.size(); ++I) {
-      Arrays[I]->replaceAllUsesWith(FirstArray);
-
-      auto &FirstArrayDataSizes = FirstArrayData.Sizes;
-      auto &OtherArraySizes = Anno.Map.at(Arrays[I]).Sizes;
-      for (size_t I = 0; I < FirstArrayDataSizes.size(); ++I) {
-        OtherArraySizes[I]->replaceAllUsesWith(FirstArrayDataSizes[I]);
-      }
-    }
-  }
-
-  return Res;
-}
-
 } // namespace
 
 PreservedAnalyses LoopFusionPass::run(Function &F,
@@ -438,10 +373,6 @@ PreservedAnalyses LoopFusionPass::run(Function &F,
   auto Loops = findLoop(F, AM.getResult<LoopAnalysis>(F),
                         AM.getResult<DominatorTreeAnalysis>(F));
   moveBlockBetweenLoops(Loops);
-
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  DT.recalculate(F);
-  fusionSameArrays(F, AM.getResult<ExtractAnnotatedSizes>(F), DT);
 
   errs() << "LoopFusionPass pass done\n";
 

@@ -99,6 +99,7 @@ add_llvm_pass_plugin(Polly
   Test/ScheduleOptimizer.cpp
   Test/UserAssumptions.cpp
   Test/CheckParallelism.cpp
+  Test/ArrayFusion.cpp
 
   ${POLLY_HEADER_FILES}
 
