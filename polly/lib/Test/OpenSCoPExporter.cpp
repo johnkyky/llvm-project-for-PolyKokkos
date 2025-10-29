@@ -792,7 +792,6 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
     // Statement domain
     isl::set NewDomain = islDomainStmtFromOsl(OSLStmt, OSLScop, S);
     NewDomain = NewDomain.set_tuple_id(Id);
-    errs() << "NewDomain : " << NewDomain << "\n";
 
     Stmt.setDomain(NewDomain);
 
@@ -800,7 +799,6 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
     // Statement scattering
     isl::map NewMap = islScheduleStmtFromOsl(OSLStmt, OSLScop, S);
     NewMap = NewMap.set_tuple_id(isl::dim::in, Id);
-    errs() << "NewMap : " << NewMap << "\n";
 
     // Memory accesses
     osl_relation_list_p OSLAccessNode = OSLStmt->access;
@@ -812,7 +810,6 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
       NewAccessMap = NewAccessMap.set_tuple_id(isl::dim::in, Id);
       isl::id ArrayId = MA->getAccessRelation().get_tuple_id(isl::dim::out);
       NewAccessMap = NewAccessMap.set_tuple_id(isl::dim::out, ArrayId);
-      errs() << "Access " << NewAccessMap << "\n";
 
       MA->setNewAccessRelation(NewAccessMap);
 
@@ -821,7 +818,6 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
 
     // Statement schedule
     isl::map NewSchedule = NewMap.intersect_domain(NewDomain);
-    errs() << "NewSchedule : " << NewSchedule << "\n";
 
     isl::union_map UMap = isl::union_map(NewSchedule);
 
