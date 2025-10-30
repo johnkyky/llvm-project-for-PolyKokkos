@@ -1,4 +1,4 @@
-//===- CodeGeneration.cpp - Code generate the Scops using ISL. ---------======//
+//===- ScheduleOptimizer.cpp - Optimize an ISL schedule with Pluto.-----======//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,6 +11,7 @@
 
 #include "polly/Test/ScheduleOptimizer.h"
 #include "polly/JSONExporter.h"
+#include "polly/Options.h"
 #include "polly/Test/OpenSCoPExporter.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -21,6 +22,12 @@
 
 using namespace llvm;
 using namespace polly;
+
+static cl::opt<std::string> PlutoArguments(
+    "polly-pluto-args", cl::desc("Arguments to be passed to pluto optimizer"),
+    cl::Hidden, cl::ValueRequired,
+    cl::init("--tile --nodiamond-tile --nointratileopt --parallel"),
+    cl::cat(PollyCategory));
 
 namespace {
 
@@ -78,7 +85,8 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
 
   std::string RunPlutoCommand =
       "docker exec pluto_container sh -c \"cat /home/" + FileNameInput +
-      " | pluto --tile --nodiamond-tile --nointratileopt --parallel --readscop "
+      " | pluto " + PlutoArguments +
+      " --readscop "
       "stdin -o "
       "stdout\"";
   errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n";
