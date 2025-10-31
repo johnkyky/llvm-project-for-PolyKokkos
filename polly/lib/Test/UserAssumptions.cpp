@@ -333,7 +333,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
                           std::vector<Comparison> &Assumptions);
 
 void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
-                         std::vector<Comparison> &Assumptions) {
+                         std::vector<Comparison> &Assumptions,
+                         DominatorTree &DT) {
   errs() << "Applying policy vs policy assumption: " << comparisonToString(C)
          << "\n";
   auto &LHS = std::get<PolicyBound>(C.LHS);
@@ -345,7 +346,6 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
 
   if (LHS.IsLiteral) {
     std::swap(C.LHS, C.RHS);
-    errs() << "On a un littéral à gauche, on swap\n";
     applyPolicyVsLiteral(C, F, Builder, Assumptions);
     return;
   }
@@ -418,8 +418,11 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
     if (C.Op == Comparison::Operator::GREATER_EQUAL)
       Pred = CmpInst::Predicate::ICMP_SGE;
 
-    Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
-    Value *Assumption = Builder.CreateAssumption(Cmp);
+    llvm::Instruction *InsertLoc = nullptr;
+    DT.dominates(LHSInst, RHSInst) ? InsertLoc = RHSInst : InsertLoc = LHSInst;
+    Builder.SetInsertPoint(InsertLoc->getNextNode());
+    llvm::Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
+    llvm::Value *Assumption = Builder.CreateAssumption(Cmp);
     errs() << "Registering assumption: " << *Assumption << "\n";
     break;
   }
@@ -499,6 +502,7 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     if (C.Op == Comparison::Operator::GREATER_EQUAL)
       Pred = CmpInst::Predicate::ICMP_SGE;
 
+    Builder.SetInsertPoint(BoundInst->getNextNode());
     Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
     Value *Assumption = Builder.CreateAssumption(Cmp);
 
@@ -510,7 +514,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
   }
 }
 
-void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions) {
+void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
+                      DominatorTree &DT) {
   IRBuilder<> Builder(&F.getEntryBlock(), F.getEntryBlock().begin());
 
   for (auto &Assumption : Assumptions) {
@@ -524,7 +529,7 @@ void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions) {
 
           if constexpr (std::is_same_v<T1, PolicyBound> &&
                         std::is_same_v<T2, PolicyBound>) {
-            applyPolicyVsPolicy(Assumption, F, Builder, Assumptions);
+            applyPolicyVsPolicy(Assumption, F, Builder, Assumptions, DT);
           } else if constexpr (std::is_same_v<T1, PolicyBound> &&
                                std::is_same_v<T2, Literal>) {
             applyPolicyVsLiteral(Assumption, F, Builder, Assumptions);
@@ -554,7 +559,8 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   for (const auto &Cmp : Assumptions)
     errs() << comparisonToString(Cmp) << "\n";
 
-  applyAssumptions(F, Assumptions);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  applyAssumptions(F, Assumptions, DT);
 
   errs() << "UserAssumptions pass done\n";
   return PreservedAnalyses::all();
