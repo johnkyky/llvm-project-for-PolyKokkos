@@ -375,6 +375,11 @@ void AnnotationData::print(raw_ostream &OS) const {
   }
 }
 
+raw_ostream &polly::operator<<(raw_ostream &OS, const AnnotationData &AD) {
+  AD.print(OS);
+  return OS;
+}
+
 AnalysisKey ExtractAnnotatedSizes::Key;
 ExtractAnnotatedSizes::Result
 ExtractAnnotatedSizes::run(Function &F, FunctionAnalysisManager &AM) {

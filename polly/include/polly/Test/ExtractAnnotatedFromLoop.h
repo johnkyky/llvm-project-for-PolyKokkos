@@ -12,6 +12,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/raw_ostream.h"
 #include <unordered_map>
 
 using namespace llvm;
@@ -47,6 +48,8 @@ struct AnnotationData {
   bool empty() const { return Map.empty(); }
   size_t size() const { return Map.size(); }
 };
+
+raw_ostream &operator<<(raw_ostream &OS, const AnnotationData &AD);
 
 class ExtractAnnotatedSizes : public AnalysisInfoMixin<ExtractAnnotatedSizes> {
   friend AnalysisInfoMixin<ExtractAnnotatedSizes>;

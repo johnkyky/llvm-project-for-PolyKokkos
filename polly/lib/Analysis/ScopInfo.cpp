@@ -2728,6 +2728,7 @@ void ScopInfo::recompute() {
     std::unique_ptr<Scop> S = SB.getScop();
     if (!S)
       continue;
+    LLVM_DEBUG(errs() << *SD.getAD() << "\n");
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_STATS)
     ScopDetection::LoopStats Stats =
         ScopDetection::countBeneficialLoops(&S->getRegion(), SE, LI, 0);
