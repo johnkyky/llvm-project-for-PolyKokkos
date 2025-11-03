@@ -13,6 +13,8 @@
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/IR/Dominators.h"
 
+#define DEBUG_TYPE "polly-array-fusion"
+
 using namespace llvm;
 using namespace polly;
 
@@ -42,20 +44,21 @@ bool sameArraysFusion(Function &F, ExtractAnnotatedSizes::Result &Anno,
 
   // Sort the map in each group by their dominance relationship
   for (auto &[Name, Arrays] : NameToArray) {
-    std::sort(Arrays.begin(), Arrays.end(),
-              [&](Instruction *A, Instruction *B) {
-                if (A->getParent() == B->getParent()) {
-                  for (Instruction &I : *A->getParent()) {
-                    if (&I == A)
-                      return true;
-                    if (&I == B)
-                      return false;
-                  }
-                  errs() << "Instructions not found in their parent block!\n";
-                }
+    std::sort(
+        Arrays.begin(), Arrays.end(), [&](Instruction *A, Instruction *B) {
+          if (A->getParent() == B->getParent()) {
+            for (Instruction &I : *A->getParent()) {
+              if (&I == A)
+                return true;
+              if (&I == B)
+                return false;
+            }
+            LLVM_DEBUG(errs()
+                       << "Instructions not found in their parent block!\n");
+          }
 
-                return DT.dominates(A, B);
-              });
+          return DT.dominates(A, B);
+        });
   }
 
   // Replace all use of arrays and sizes with the first one in each group
@@ -88,12 +91,13 @@ PreservedAnalyses ArrayFusion::run(Function &F, FunctionAnalysisManager &AM) {
     return PreservedAnalyses::all();
   }
 
-  errs() << "ArrayFusion pass run on " << F.getName() << "\n";
+  LLVM_DEBUG(errs() << "ArrayFusion pass run on " << F.getName() << "\n");
 
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   DT.recalculate(F);
   sameArraysFusion(F, AM.getResult<ExtractAnnotatedSizes>(F), DT);
-  errs() << "LoopFusionPass pass done for basic parallel_for\n";
+
+  LLVM_DEBUG(errs() << "ArrayFusion pass done\n");
 
   return PreservedAnalyses::none();
 }

@@ -1184,13 +1184,13 @@ static isl::multi_union_pw_aff mapToDimension(isl::union_set USet, unsigned N) {
 }
 
 void ScopBuilder::buildSchedule() {
-  llvm::errs() << "buildSchedule run\n";
+  LLVM_DEBUG(errs() << "buildSchedule run\n");
   Loop *L = getLoopSurroundingScop(*scop, LI);
   LoopStackTy LoopStack({LoopStackElementTy(L, {}, 0)});
   buildSchedule(scop->getRegion().getNode(), LoopStack);
   assert(LoopStack.size() == 1 && LoopStack.back().L == L);
   scop->setScheduleTree(LoopStack[0].Schedule);
-  llvm::errs() << "buildSchedule end\n\n";
+  LLVM_DEBUG(errs() << "buildSchedule end\n");
 }
 
 /// To generate a schedule for the elements in a Region we traverse the Region
@@ -1758,19 +1758,16 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
 void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
   if (buildAccessMemIntrinsic(Inst, Stmt)) {
     Inst->print(errs(), true);
-    errs() << " " << "buildAccessMemIntrinsic\n";
     return;
   }
 
   if (buildAccessCallInst(Inst, Stmt)) {
     Inst->print(errs(), true);
-    errs() << " " << "buildAccessCallInst\n";
     return;
   }
 
   if (buildAccessMultiDimFixed(Inst, Stmt)) {
     Inst->print(errs(), true);
-    errs() << " " << "buildAccessMultiDimFixed\n";
     return;
   }
 
@@ -1788,15 +1785,15 @@ void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
 }
 
 void ScopBuilder::buildAccessFunctions() {
-  errs() << "buildAccessFunctions run\n";
+  LLVM_DEBUG(errs() << "buildAccessFunctions run\n");
   for (auto &Stmt : *scop) {
     if (Stmt.isBlockStmt()) {
-      errs() << "Stmt " << Stmt.getBaseName() << " isBlockStmt\n";
+      LLVM_DEBUG(errs() << "Stmt " << Stmt.getBaseName() << " isBlockStmt\n");
       buildAccessFunctions(&Stmt, *Stmt.getBasicBlock());
       continue;
     }
 
-    errs() << "Stmt " << Stmt.getBaseName() << " not isBlockStmt\n";
+    LLVM_DEBUG(errs() << "Stmt " << Stmt.getBaseName() << " not isBlockStmt\n");
     Region *R = Stmt.getRegion();
     for (BasicBlock *BB : R->blocks())
       buildAccessFunctions(&Stmt, *BB, R);
@@ -1810,7 +1807,7 @@ void ScopBuilder::buildAccessFunctions() {
     for (Instruction &Inst : *BB)
       buildEscapingDependences(&Inst);
   }
-  errs() << "buildAccessFunctions done\n";
+  LLVM_DEBUG(errs() << "buildAccessFunctions done\n");
 }
 
 bool ScopBuilder::shouldModelInst(Instruction *Inst, Loop *L) {
@@ -1860,7 +1857,7 @@ void ScopBuilder::buildSequentialBlockStmts(BasicBlock *BB, bool SplitOnStore) {
   for (Instruction &Inst : *BB) {
     if (shouldModelInst(&Inst, SurroundingLoop)) {
       Instructions.push_back(&Inst);
-      // llvm::errs() << "\ton peut model " << Inst << "\n";
+      // errs() << "\ton peut model " << Inst << "\n";
     }
     if (Inst.getMetadata("polly_split_after") ||
         (SplitOnStore && isa<StoreInst>(Inst))) {
@@ -3301,7 +3298,6 @@ static isl::set getAccessDomain(MemoryAccess *MA) {
 }
 
 bool ScopBuilder::buildAliasChecks() {
-  errs() << "buildAliasChecks run\n";
   if (!PollyUseRuntimeAliasChecks)
     return true;
 
@@ -3310,7 +3306,6 @@ bool ScopBuilder::buildAliasChecks() {
     // collect statistics so we do it here explicitly.
     if (scop->getAliasGroups().size())
       Scop::incrementNumberOfAliasingAssumptions(1);
-    errs() << "buildAliasChecks done\n";
     return true;
   }
 
@@ -3321,7 +3316,6 @@ bool ScopBuilder::buildAliasChecks() {
 
   POLLY_DEBUG(dbgs() << "\n\nNOTE: Run time checks for " << scop->getNameStr()
                      << " could not be created. This SCoP has been dismissed.");
-  errs() << "buildAliasChecks done with error\n";
   return false;
 }
 
@@ -3586,8 +3580,8 @@ static void verifyUses(Scop *S, LoopInfo &LI, DominatorTree &DT) {
 #endif
 
 void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
-  llvm::errs() << "buildscop function run\n";
-  llvm::errs() << "region : " << R << "\n";
+  LLVM_DEBUG(errs() << "buildscop function run\n");
+  LLVM_DEBUG(errs() << "region : " << R << "\n");
   scop.reset(new Scop(R, SE, LI, DT, *SD.getDetectionContext(&R), ORE,
                       SD.getNextID()));
 
@@ -3595,22 +3589,22 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     auto BackendAttr = scop->getFunction().getFnAttribute("polly.backend");
     std::string Backend = BackendAttr.getValueAsString().str();
 
-    errs() << "Found backend attribute: " << Backend << "\n";
+    LLVM_DEBUG(errs() << "Found backend attribute: " << Backend << "\n");
     scop->setBackendFromString(Backend);
   }
 
-  llvm::errs() << "scop begin : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop begin : " << *scop << "\n");
 
   buildStmts(R);
 
-  llvm::errs() << "scop after buildStmts : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildStmts : " << *scop << "\n");
 
   // Create all invariant load instructions first. These are categorized as
   // 'synthesizable', therefore are not part of any ScopStmt but need to be
   // created somewhere.
   const InvariantLoadsSetTy &RIL = scop->getRequiredInvariantLoads();
   // for (auto &ILST : RIL) {
-  //   llvm::errs() << "scop->getRequiredInvariantLoads()" << *ILST << "\n";
+  //   errs() << "scop->getRequiredInvariantLoads()" << *ILST << "\n";
   // }
   for (BasicBlock *BB : scop->getRegion().blocks()) {
     if (SD.isErrorBlock(*BB, scop->getRegion()))
@@ -3635,12 +3629,12 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     }
   }
 
-  llvm::errs() << "scop after build memory access for invariant load: " << *scop
-               << "\n";
+  LLVM_DEBUG(errs() << "scop after build memory access for invariant load: "
+                    << *scop << "\n");
 
   buildAccessFunctions();
 
-  llvm::errs() << "scop after buildAccessFunctions : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildAccessFunctions : " << *scop << "\n");
 
   // In case the region does not have an exiting block we will later (during
   // code generation) split the exit block. This will move potential PHI nodes
@@ -3660,26 +3654,26 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     }
   }
 
-  llvm::errs() << "scop after buildPHIAccesses : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildPHIAccesses : " << *scop << "\n");
 
   // Create memory accesses for global reads since all arrays are now known.
   auto *AF = SE.getConstant(IntegerType::getInt64Ty(SE.getContext()), 0);
   for (auto GlobalReadPair : GlobalReads) {
     ScopStmt *GlobalReadStmt = GlobalReadPair.first;
     Instruction *GlobalRead = GlobalReadPair.second;
-    llvm::errs() << "statements " << GlobalReadStmt << "     read "
-                 << *GlobalRead << "\n";
+    LLVM_DEBUG(errs() << "statements " << GlobalReadStmt << "     read "
+                      << *GlobalRead << "\n");
     for (auto *BP : ArrayBasePointers)
       addArrayAccess(GlobalReadStmt, MemAccInst(GlobalRead), MemoryAccess::READ,
                      BP, BP->getType(), false, {AF}, {nullptr}, GlobalRead);
   }
 
-  llvm::errs() << "scop after adddArrayAccess : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after adddArrayAccess : " << *scop << "\n");
 
   buildInvariantEquivalenceClasses();
 
-  llvm::errs() << "scop after buildInvariantEquivalenceClasses : " << *scop
-               << "\n";
+  LLVM_DEBUG(errs() << "scop after buildInvariantEquivalenceClasses : " << *scop
+                    << "\n");
 
   /// A map from basic blocks to their invalid domains.
   DenseMap<BasicBlock *, isl::set> InvalidDomainMap;
@@ -3687,11 +3681,10 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   if (!buildDomains(&R, InvalidDomainMap)) {
     POLLY_DEBUG(
         dbgs() << "Bailing-out because buildDomains encountered problems\n");
-    llvm::errs() << "buildscop function done (not buildDomains)\n";
     return;
   }
 
-  llvm::errs() << "scop after buildDomains : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildDomains : " << *scop << "\n");
 
   addUserAssumptions(AC, InvalidDomainMap);
 
@@ -3703,19 +3696,18 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       Stmt.setInvalidDomain(InvalidDomainMap[getRegionNodeBasicBlock(
           Stmt.getRegion()->getNode())]);
 
-  llvm::errs() << "scop before removeEmpty : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop before removeEmpty : " << *scop << "\n");
   // Remove empty statements.
   // Exit early in case there are no executable statements left in this scop.
   scop->removeStmtNotInDomainMap();
-  llvm::errs() << "scop between removeEmpty : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop between removeEmpty : " << *scop << "\n");
   scop->simplifySCoP(false);
   if (scop->isEmpty()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because SCoP is empty\n");
-    llvm::errs() << "buildscop function done (scop is empty)\n";
     return;
   }
 
-  llvm::errs() << "scop after simplify : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after simplify : " << *scop << "\n");
 
   // The ScopStmts now have enough information to initialize themselves.
   for (ScopStmt &Stmt : *scop) {
@@ -3728,14 +3720,12 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       checkForReductions(Stmt);
   }
 
-  llvm::errs() << "scop after all : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after all : " << *scop << "\n");
 
   // Check early for a feasible runtime context.
   if (!scop->hasFeasibleRuntimeContext()) {
     POLLY_DEBUG(
         dbgs() << "Bailing-out because of unfeasible context (early)\n");
-    llvm::errs()
-        << "buildscop function done (scop has not FeasibleRuntimeContext)\n";
     return;
   }
 
@@ -3745,17 +3735,16 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     scop->invalidate(PROFITABLE, DebugLoc());
     POLLY_DEBUG(
         dbgs() << "Bailing-out because SCoP is not considered profitable\n");
-    llvm::errs() << "buildscop function done (scop isn't profitable)\n";
     return;
   }
 
   buildSchedule();
 
-  llvm::errs() << "scop after buildSchedule : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildSchedule : " << *scop << "\n");
 
   finalizeAccesses();
 
-  llvm::errs() << "scop after finalizeAccesses : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after finalizeAccesses : " << *scop << "\n");
 
   scop->realignParams();
   addUserContext();
@@ -3766,14 +3755,13 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   addRecordedAssumptions();
 
   scop->simplifyContexts();
-  llvm::errs() << "scop after simplifyContexts : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after simplifyContexts : " << *scop << "\n");
   if (!buildAliasChecks()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because could not build alias checks\n");
-    llvm::errs() << "buildscop function done (not buildAliasChecks)\n";
     return;
   }
 
-  llvm::errs() << "scop after buildAliasChecks : " << *scop << "\n";
+  LLVM_DEBUG(errs() << "scop after buildAliasChecks : " << *scop << "\n");
 
   hoistInvariantLoads();
   canonicalizeDynamicBasePtrs();
@@ -3784,8 +3772,6 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   // change.
   if (!scop->hasFeasibleRuntimeContext()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because of unfeasible context (late)\n");
-    llvm::errs()
-        << "buildscop function done (scop not has FeasibleRuntimeContext)\n";
     return;
   }
 
@@ -3793,7 +3779,7 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   verifyUses(scop.get(), LI, DT);
 #endif
 
-  llvm::errs() << "buildscop function done\n";
+  LLVM_DEBUG(errs() << "buildscop function done\n");
 }
 
 ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
@@ -3811,11 +3797,6 @@ ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
 
   buildScop(*R, AC);
 
-  if (scop)
-    llvm::errs() << "BuildScop success\n";
-  else
-    llvm::errs() << "BuildScop fail\n";
-
   POLLY_DEBUG(dbgs() << *scop);
 
   if (!scop->hasFeasibleRuntimeContext()) {
@@ -3824,7 +3805,6 @@ ScopBuilder::ScopBuilder(Region *R, AssumptionCache &AC, AAResults &AA,
     POLLY_DEBUG(dbgs() << "SCoP detected but dismissed\n");
     RecordedAssumptions.clear();
     scop.reset();
-    llvm::errs() << "scop hasn't feasible Runtime Context\n";
   } else {
     Msg = "SCoP ends here.";
     ++ScopFound;

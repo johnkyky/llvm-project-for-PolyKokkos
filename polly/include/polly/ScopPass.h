@@ -254,7 +254,6 @@ struct FunctionToScopPassAdaptor final
 
     while (!Worklist.empty()) {
       Region *R = Worklist.pop_back_val();
-      llvm::errs() << "Worklist " << *R << "\n";
       if (!SD.isMaxRegionInScop(*R, /*Verify=*/false))
         continue;
       Scop *scop = SI.getScop(R);

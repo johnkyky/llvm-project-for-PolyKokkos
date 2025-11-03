@@ -2076,16 +2076,12 @@ public:
   void setBackend(BackendTy B) { Backend = B; }
   void setBackendFromString(std::string B) {
     if (B == "Serial") {
-      errs() << "on rentre bien la SERIAL" << B << "\n";
       Backend = Serial;
     } else if (B == "OpenMP") {
-      errs() << "on rentre bien la OpenMP " << B << "\n";
       Backend = OpenMP;
     } else if (B == "CUDA") {
-      errs() << "on rentre bien la CUDA " << B << "\n";
       Backend = CUDA;
     } else {
-      errs() << "on rentre bien la UNDEFINED " << B << "\n";
       Backend = Undefined;
     }
   }
