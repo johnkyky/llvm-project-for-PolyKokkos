@@ -23,10 +23,14 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <stack>
 #include <string>
+
+#define DEBUG_TYPE "polly-extract-annotations"
 
 using namespace llvm;
 using namespace polly;
@@ -159,10 +163,10 @@ BasicBlock *getExitBlock(Function &F) {
 }
 
 bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
-  errs() << "on cherche les loop\n";
+  LLVM_DEBUG(errs() << "on cherche les loop\n");
   auto Loops = findLoop(F, LI, DT);
   for (auto &L : Loops) {
-    errs() << "Loop found: " << *L << "\n";
+    LLVM_DEBUG(errs() << "Loop found: " << *L << "\n");
   }
 
   bool Res = false;
@@ -183,8 +187,9 @@ bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
           StrRef.split(StrRefParts, ' ');
 
           if (StrRefParts.size() != 3) {
-            errs() << "ExtractAnnotatedFromLoop pass on " << F.getName()
-                   << " : Bad annotation loop bound format ici\n";
+            report_fatal_error("ExtractAnnotatedFromLoop pass on " +
+                               F.getName() +
+                               " : Loop bound annotation bad format\n");
           }
 
           size_t PolicyIndex = 0;
@@ -202,8 +207,9 @@ bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
             }
 
           } else {
-            errs() << "ExtractAnnotatedFromLoop pass on " << F.getName()
-                   << " : Bad annotation loop bound format\n";
+            report_fatal_error(
+                "ExtractAnnotatedFromLoop pass on " + F.getName() +
+                " : Loop bound type (lower/upper) not recognized\n");
           }
 
           llvm::Metadata *PolicyIndexMetadata = llvm::ConstantAsMetadata::get(
@@ -427,7 +433,8 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
 
-  errs() << "ExtractAnnotatedFromLoop pass run on " << F.getName() << "\n";
+  LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass run on " << F.getName()
+                    << "\n");
 
   bool Changed = false;
   Changed |= readBackend(F);
@@ -440,6 +447,6 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
     llvm::errs() << "Backend = " << Value << "\n";
   }
 
-  errs() << "ExtractAnnotatedFromLoop pass done\n";
+  LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass done\n");
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }

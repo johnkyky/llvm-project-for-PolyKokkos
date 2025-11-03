@@ -23,6 +23,8 @@
 using namespace llvm;
 using namespace polly;
 
+#define DEBUG_TYPE "polly-pluto"
+
 static cl::opt<std::string> PlutoArguments(
     "polly-pluto-args", cl::desc("Arguments to be passed to pluto optimizer"),
     cl::Hidden, cl::ValueRequired,
@@ -70,17 +72,18 @@ PreservedAnalyses
 PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
                                 ScopStandardAnalysisResults &SAR,
                                 SPMUpdater &U) {
-  errs() << "PlutoScheduleOptimizerPass run on " << S.getName() << "\n";
+  LLVM_DEBUG(errs() << "PlutoScheduleOptimizerPass run on " << S.getName()
+                    << "\n");
 
   std::string FileNameInput = "./" + getFileName(S, "_input", "scop");
 
   OpenSCoPExportPass::exportOpenScop(S, FileNameInput);
 
-  errs() << "Calling pluto on the file " << FileNameInput << "\n";
+  LLVM_DEBUG(errs() << "Calling pluto on the file " << FileNameInput << "\n");
 
   std::string CopyCommand =
       "docker cp " + FileNameInput + " pluto_container:/home/";
-  errs() << "CopyCommand: " << CopyCommand << "\n";
+  LLVM_DEBUG(errs() << "CopyCommand: " << CopyCommand << "\n");
   std::system(CopyCommand.c_str());
 
   std::string RunPlutoCommand =
@@ -89,10 +92,10 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
       " --readscop "
       "stdin -o "
       "stdout\"";
-  errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n";
+  LLVM_DEBUG(errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n");
   auto ResultPluto = exec(RunPlutoCommand.c_str());
 
-  errs() << "Result of pluto:\n" << ResultPluto << "\n";
+  LLVM_DEBUG(errs() << "Result of pluto:\n" << ResultPluto << "\n");
 
   std::string NewScopExtracted = extractOpenScopFromString(ResultPluto);
 
@@ -100,6 +103,8 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
   saveToFile(FileNameOutput, NewScopExtracted);
 
   OpenSCoPImportPass::importOpenScop(S, FileNameOutput);
+
+  LLVM_DEBUG(errs() << "PlutoScheduleOptimizerPass done\n");
 
   return PreservedAnalyses::none();
 }

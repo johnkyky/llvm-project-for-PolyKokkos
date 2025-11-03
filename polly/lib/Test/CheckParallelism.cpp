@@ -15,6 +15,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "isl/ast.h"
 
+#define DEBUG_TYPE "polly-check-parallelism"
+
 using namespace llvm;
 using namespace polly;
 
@@ -101,7 +103,8 @@ PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
     return PreservedAnalyses::all();
   }
 
-  errs() << "CheckParallelismPass pass run on " << S.getName() << "\n";
+  LLVM_DEBUG(errs() << "CheckParallelismPass pass run on " << S.getName()
+                    << "\n");
 
   auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
 
@@ -109,7 +112,7 @@ PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
   isl::ast_node AstRoot = Ast.getAst();
 
   if (AstRoot.is_null()) {
-    errs() << "CheckParallelismPass: AstRoot is null\n";
+    LLVM_DEBUG(errs() << "CheckParallelismPass: AstRoot is null\n");
     return PreservedAnalyses::all();
   }
 
@@ -117,11 +120,12 @@ PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
   // Kokkos generate parallel for only on the outermost loop
   IsValid = visite(AstRoot.release(), S, 0);
 
-  errs() << "CheckParallelismPass: Scop " << S.getName()
-         << (IsValid ? " is " : " is not ") << "valid for Kokkos backend "
-         << S.getBackendStr() << "\n";
+  LLVM_DEBUG(errs() << "CheckParallelismPass: Scop " << S.getName()
+                    << (IsValid ? " is " : " is not ")
+                    << "valid for Kokkos backend " << S.getBackendStr()
+                    << "\n");
 
-  errs() << "CheckParallelismPass pass done\n";
+  LLVM_DEBUG(errs() << "CheckParallelismPass pass done\n");
 
   return PreservedAnalyses::none();
 }

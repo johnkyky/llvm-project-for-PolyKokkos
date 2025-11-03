@@ -18,6 +18,8 @@
 #include <optional>
 #include <regex>
 
+#define DEBUG_TYPE "polly-user-assumptions"
+
 using namespace llvm;
 using namespace polly;
 
@@ -335,8 +337,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
 void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
                          std::vector<Comparison> &Assumptions,
                          DominatorTree &DT) {
-  errs() << "Applying policy vs policy assumption: " << comparisonToString(C)
-         << "\n";
+  LLVM_DEBUG(errs() << "Applying policy vs policy assumption: "
+                    << comparisonToString(C) << "\n");
   auto &LHS = std::get<PolicyBound>(C.LHS);
   auto &RHS = std::get<PolicyBound>(C.RHS);
 
@@ -372,7 +374,8 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
 
   switch (C.Op) {
   case Comparison::Operator::EQUAL: {
-    errs() << "Replacing " << *RHSInst << " with " << *LHSInst << "\n";
+    LLVM_DEBUG(errs() << "Replacing " << *RHSInst << " with " << *LHSInst
+                      << "\n");
     RHSInst->replaceAllUsesWith(LHSInst);
 
     // Update other assumptions that reference RHSInst to use LHSInst
@@ -395,8 +398,8 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
         }
       }
       if (Updated) {
-        errs() << "Updated related assumption: " << comparisonToString(OtherC)
-               << "\n";
+        LLVM_DEBUG(errs() << "Updated related assumption: "
+                          << comparisonToString(OtherC) << "\n");
       }
     }
     break;
@@ -423,7 +426,7 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
     Builder.SetInsertPoint(InsertLoc->getNextNode());
     llvm::Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
     llvm::Value *Assumption = Builder.CreateAssumption(Cmp);
-    errs() << "Registering assumption: " << *Assumption << "\n";
+    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
     break;
   }
   default:
@@ -433,8 +436,8 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
 
 void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
                           std::vector<Comparison> &Assumptions) {
-  errs() << "Applying policy vs literal assumption: " << comparisonToString(C)
-         << "\n";
+  LLVM_DEBUG(errs() << "Applying policy vs literal assumption: "
+                    << comparisonToString(C) << "\n");
   auto &LHS = std::get<PolicyBound>(C.LHS);
   auto &RHS = std::get<Literal>(C.RHS);
 
@@ -446,8 +449,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
 
   switch (C.Op) {
   case Comparison::Operator::EQUAL: {
-    errs() << "Replacing " << *BoundInst << " with constant " << *ConstVal
-           << "\n";
+    LLVM_DEBUG(errs() << "Replacing " << *BoundInst << " with constant "
+                      << *ConstVal << "\n");
     BoundInst->replaceAllUsesWith(ConstVal);
     LHS.IsLiteral = true;
     LHS.LiteralValue = RHS;
@@ -478,8 +481,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
         }
       }
       if (Updated) {
-        errs() << "Updated related assumption: " << comparisonToString(OtherC)
-               << "\n";
+        LLVM_DEBUG(errs() << "Updated related assumption: "
+                          << comparisonToString(OtherC) << "\n");
       }
     }
 
@@ -506,7 +509,7 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
     Value *Assumption = Builder.CreateAssumption(Cmp);
 
-    errs() << "Registering assumption: " << *Assumption << "\n";
+    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
     break;
   }
   default:
@@ -519,8 +522,8 @@ void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
   IRBuilder<> Builder(&F.getEntryBlock(), F.getEntryBlock().begin());
 
   for (auto &Assumption : Assumptions) {
-    errs() << "\n\nApplying assumption: " << comparisonToString(Assumption)
-           << "\n";
+    LLVM_DEBUG(errs() << "\n\nApplying assumption: "
+                      << comparisonToString(Assumption) << "\n");
 
     std::visit(
         [&](auto &&LHS, auto &&RHS) {
@@ -548,20 +551,21 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
 
-  errs() << "UserAssumptions pass run on " << F.getName().str() << "\n";
+  LLVM_DEBUG(errs() << "UserAssumptions pass run on " << F.getName().str()
+                    << "\n");
 
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
-  errs() << LBA << "\n";
+  LLVM_DEBUG(errs() << LBA << "\n");
 
   auto AssumptionsStr = extractAssumptionAnnotation(F, LBA);
   auto Assumptions = parseAssumptions(AssumptionsStr, LBA);
 
   for (const auto &Cmp : Assumptions)
-    errs() << comparisonToString(Cmp) << "\n";
+    LLVM_DEBUG(errs() << comparisonToString(Cmp) << "\n");
 
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   applyAssumptions(F, Assumptions, DT);
 
-  errs() << "UserAssumptions pass done\n";
+  LLVM_DEBUG(errs() << "UserAssumptions pass done\n");
   return PreservedAnalyses::all();
 }
