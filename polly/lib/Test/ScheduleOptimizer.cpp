@@ -102,7 +102,7 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
   std::string FileNameOutput = getFileName(S, "_output", "scop");
   saveToFile(FileNameOutput, NewScopExtracted);
 
-  OpenSCoPImportPass::importOpenScop(S, FileNameOutput);
+  OpenSCoPImportPass::importOpenScop(S, FileNameOutput, FileNameInput);
 
   LLVM_DEBUG(errs() << "PlutoScheduleOptimizerPass done\n");
 

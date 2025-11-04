@@ -28,6 +28,8 @@
 #include <osl/scop.h>
 #include <string>
 
+#define DEBUG_TYPE "polly-openscop-exporter"
+
 using namespace llvm;
 using namespace polly;
 
@@ -169,11 +171,6 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
   isl::set Domain = Stmt.getDomain();
   isl::basic_set_list BasicSetList = Domain.get_basic_set_list();
   auto Size = unsignedFromIslSize(BasicSetList.size());
-
-  if (Size > 1) {
-    errs() << "Warning: Domain has more than one basic set, only the first one "
-              "will be processed.\n";
-  }
 
   std::vector<std::vector<long long>> Matrix;
   BasicSetList.foreach ([&](isl::basic_set BasicSet) -> isl::stat {
@@ -442,12 +439,14 @@ isl::set islDomainStmtFromOsl(osl_statement_p OSLStmt, osl_scop_p OSLScop,
   return islDomainStmtFromOsl(OSLStmt->domain, Space);
 }
 
-isl::map islScheduleStmtFromOsl(osl_relation_p Scattering, isl::space Space) {
+isl::map islScheduleStmtFromOsl(osl_statement_p OSLStmt,
+                                osl_statement_p OldOSLStmt, isl::space Space) {
   isl::ctx Ctx = Space.ctx();
 
   isl_mat *Ineq =
-      extractEquationsOSL<EquationType::Inequality>(Ctx, Scattering);
-  isl_mat *Eq = extractEquationsOSL<EquationType::Equality>(Ctx, Scattering);
+      extractEquationsOSL<EquationType::Inequality>(Ctx, OSLStmt->scattering);
+  isl_mat *Eq =
+      extractEquationsOSL<EquationType::Equality>(Ctx, OSLStmt->scattering);
 
   isl::basic_map BasicMap = isl::manage(isl_basic_map_from_constraint_matrices(
       Space.copy(), Eq, Ineq, isl_dim_out, isl_dim_in, isl_dim_div,
@@ -457,9 +456,10 @@ isl::map islScheduleStmtFromOsl(osl_relation_p Scattering, isl::space Space) {
 }
 
 isl::map islScheduleStmtFromOsl(osl_statement_p OSLStmt, osl_scop_p OSLScop,
-                                Scop &S) {
-  int NbIterator = osl_statement_get_nb_iterators(OSLStmt);
+                                Scop &S, ScopStmt &Stmt,
+                                osl_statement_p OldOSLStmt) {
   int NbParameter = osl_scop_get_nb_parameters(OSLScop);
+  int NbIterator = osl_statement_get_nb_iterators(OSLStmt);
   int NbOutput = OSLStmt->scattering->nb_output_dims;
 
   auto NbParameterScop = static_cast<int>(
@@ -484,7 +484,7 @@ isl::map islScheduleStmtFromOsl(osl_statement_p OSLStmt, osl_scop_p OSLScop,
     }
   }
 
-  return islScheduleStmtFromOsl(OSLStmt->scattering, Space);
+  return islScheduleStmtFromOsl(OSLStmt, OldOSLStmt, Space);
 }
 
 isl::map islAccessFromOsl(osl_relation_p Scattering, isl::space Space) {
@@ -699,6 +699,86 @@ ScopStmt &getStmtByName(Scop &S, StringRef Name) {
 
   errs() << "End of test importOpenScopTest\n\n\n";
 }
+
+SmallVector<std::pair<int, int>, 4>
+linkIteratorsBetweenPlutoAndPolly(osl_statement_p OSLStmt,
+                                  osl_statement_p OldOSLStmt) {
+  SmallVector<std::pair<int, int>, 4> Links;
+  osl_body_p Body =
+      (osl_body_p)osl_generic_lookup(OSLStmt->extension, OSL_URI_BODY);
+
+  osl_body_p OldBody =
+      (osl_body_p)osl_generic_lookup(OldOSLStmt->extension, OSL_URI_BODY);
+
+  for (int I = 0; I < OSLStmt->domain->nb_output_dims; ++I) {
+    std::string PlutoIterName = Body->iterators->string[I];
+    for (int J = 0; J < OldOSLStmt->domain->nb_output_dims; ++J) {
+      std::string PollyIterName = OldBody->iterators->string[J];
+      if (PlutoIterName == PollyIterName) {
+        Links.push_back(std::make_pair(I, J));
+      }
+    }
+  }
+
+  for (auto Link : Links) {
+    LLVM_DEBUG(errs() << "Final Link: Pluto iterator " << Link.first
+                      << " with Polly iterator " << Link.second << "\n");
+  }
+
+  return Links;
+}
+
+isl::map convertPlutotransformationToPolly(isl::set PlutoDomain,
+                                           isl::map PlutoScattering,
+                                           isl::set PollyDomain,
+                                           osl_statement_p OSLStmt,
+                                           osl_statement_p OldOSLStmt) {
+  LLVM_DEBUG(errs() << "\n\nTest function\n");
+  LLVM_DEBUG(errs() << "Polly Domain: " << PollyDomain << "\n");
+  LLVM_DEBUG(errs() << "Pluto Domain: " << PlutoDomain << "\n");
+  LLVM_DEBUG(errs() << "Pluto Scattering: " << PlutoScattering << "\n\n");
+
+  isl::map MapPollyDomain = isl::map::from_domain(PollyDomain);
+  LLVM_DEBUG(errs() << "Map Polly Domain: " << MapPollyDomain << "\n");
+
+  isl::map MapPlutoDomain = isl::map::from_domain(PlutoDomain);
+  LLVM_DEBUG(errs() << "Map Pluto Domain: " << MapPlutoDomain << "\n");
+
+  //
+  isl::map MapPollyDomainInv = MapPollyDomain.reverse();
+  LLVM_DEBUG(errs() << "Map Pluto Domain Inverse: " << MapPollyDomainInv
+                    << "\n");
+
+  //
+  isl::map MapNewToOldBroken = MapPlutoDomain.apply_range(MapPollyDomainInv);
+  LLVM_DEBUG(errs() << "\nMap New to Old Broken: " << MapNewToOldBroken
+                    << "\n");
+
+  isl::space Space = MapNewToOldBroken.get_space();
+  LLVM_DEBUG(errs() << "Space: " << Space << "\n");
+
+  isl::map FixMap = isl::map::universe(Space);
+  auto LinkedIterators = linkIteratorsBetweenPlutoAndPolly(OSLStmt, OldOSLStmt);
+  for (auto Link : LinkedIterators)
+    FixMap =
+        FixMap.equate(isl::dim::in, Link.first, isl::dim::out, Link.second);
+
+  LLVM_DEBUG(errs() << "Fix Map: " << FixMap << "\n");
+
+  isl::map MapNewToOld = MapNewToOldBroken.intersect(FixMap);
+  LLVM_DEBUG(errs() << "Map New to Old: " << MapNewToOld << "\n\n");
+
+  isl::map MapIntermediaire = MapNewToOld.reverse();
+  LLVM_DEBUG(errs() << "Map Intermediaire: " << MapIntermediaire << "\n");
+
+  isl::map Scattering = MapIntermediaire.apply_range(PlutoScattering);
+  LLVM_DEBUG(errs() << "Scattering: " << Scattering << "\n");
+
+  isl::map ScatteringClean = Scattering.gist_domain(PollyDomain);
+  LLVM_DEBUG(errs() << "Scattering Clean: " << ScatteringClean << "\n");
+
+  return ScatteringClean;
+}
 } // namespace
 
 void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
@@ -727,7 +807,6 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   for (unsigned I = 0; I < NbParams; I++) {
     isl::id Id = C.get_dim_id(isl::dim::param, I);
     if (Id.is_null()) {
-      errs() << "Error retrieving the parameter id at index " << I << ".\n";
       return;
     }
     osl_strings_add(Str, isl_id_get_name(Id.get()));
@@ -753,16 +832,21 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
 PreservedAnalyses OpenSCoPExportPass::run(Scop &S, ScopAnalysisManager &SAM,
                                           ScopStandardAnalysisResults &SAR,
                                           SPMUpdater &) {
-  errs() << "Exporting OpenScop for SCoP '" << S.getNameStr() << "\n";
+  LLVM_DEBUG(errs() << "Exporting OpenScop for SCoP '" << S.getNameStr()
+                    << "\n");
 
   std::string FileName = getFileName(S, "", "scop");
   exportOpenScop(S, FileName);
 
-  errs() << "End of exporting OpenScop for SCoP '" << S.getNameStr() << "\n";
+  LLVM_DEBUG(errs() << "End of exporting OpenScop for SCoP '" << S.getNameStr()
+                    << "\n");
   return PreservedAnalyses::all();
 }
 
-void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
+void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName,
+                                        std::string OldFileName) {
+  LLVM_DEBUG(errs() << "Importing OpenScop file: " << FileName << "\n");
+
   FILE *File = std::fopen(FileName.c_str(), "r");
   if (!File)
     llvm_unreachable("Could not open the OpenSCoP file for writing.");
@@ -774,11 +858,24 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
   if (!OSLScop)
     llvm_unreachable("Could not read the OpenSCoP file.");
 
+  //
+  File = std::fopen(OldFileName.c_str(), "r");
+  if (!File)
+    llvm_unreachable("Could not open the OpenSCoP file for writing.");
+
+  osl_scop_p OldOSLScop = osl_scop_read(File);
+
+  std::fclose(File);
+
+  if (!OldOSLScop)
+    llvm_unreachable("Could not read the OpenSCoP file.");
+
   isl_ctx *Ctx = S.getIslCtx().get();
 
   isl::union_map USchedule = isl::union_map::empty(Ctx);
-  for (osl_statement_p OSLStmt = OSLScop->statement; OSLStmt;
-       OSLStmt = OSLStmt->next) {
+  for (osl_statement_p OSLStmt = OSLScop->statement,
+                       OldOSLStmt = OldOSLScop->statement;
+       OSLStmt; OSLStmt = OSLStmt->next, OldOSLStmt = OldOSLStmt->next) {
     // Statement name
     std::string StmtName;
     osl_body_p StmtBody =
@@ -790,56 +887,46 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName) {
     isl::id Id = Stmt.getDomainId();
 
     // Statement domain
-    isl::set NewDomain = islDomainStmtFromOsl(OSLStmt, OSLScop, S);
-    NewDomain = NewDomain.set_tuple_id(Id);
+    isl::set PlutoDomain = islDomainStmtFromOsl(OSLStmt, OSLScop, S);
+    PlutoDomain = PlutoDomain.set_tuple_id(Id);
+    LLVM_DEBUG(errs() << "Pluto Domain " << PlutoDomain << "\n");
+    LLVM_DEBUG(errs() << "Polly Domain " << Stmt.getDomain() << "\n");
 
-    Stmt.setDomain(NewDomain);
-
-    //
     // Statement scattering
-    isl::map NewMap = islScheduleStmtFromOsl(OSLStmt, OSLScop, S);
-    NewMap = NewMap.set_tuple_id(isl::dim::in, Id);
+    isl::map PlutoScattering =
+        islScheduleStmtFromOsl(OSLStmt, OSLScop, S, Stmt, OldOSLStmt);
+    PlutoScattering = PlutoScattering.set_tuple_id(isl::dim::in, Id);
+    LLVM_DEBUG(errs() << "Pluto Scattering " << PlutoScattering << "\n");
 
-    // Memory accesses
-    osl_relation_list_p OSLAccessNode = OSLStmt->access;
-    for (auto *MA : Stmt) {
-      osl_relation_p OSLAccess = OSLAccessNode->elt;
-
-      isl::map NewAccessMap =
-          islAccessFromOSL(OSLAccess, MA, S, OSLScop, OSLStmt);
-      NewAccessMap = NewAccessMap.set_tuple_id(isl::dim::in, Id);
-      isl::id ArrayId = MA->getAccessRelation().get_tuple_id(isl::dim::out);
-      NewAccessMap = NewAccessMap.set_tuple_id(isl::dim::out, ArrayId);
-
-      MA->setNewAccessRelation(NewAccessMap);
-
-      OSLAccessNode = OSLAccessNode->next;
-    }
+    PlutoScattering = convertPlutotransformationToPolly(
+        PlutoDomain, PlutoScattering, Stmt.getDomain(), OSLStmt, OldOSLStmt);
+    LLVM_DEBUG(errs() << "Converted Scattering " << PlutoScattering << "\n");
 
     // Statement schedule
-    isl::map NewSchedule = NewMap.intersect_domain(NewDomain);
+    isl::map NewSchedule = PlutoScattering.intersect_domain(Stmt.getDomain());
 
     isl::union_map UMap = isl::union_map(NewSchedule);
 
     USchedule = USchedule.unite(UMap);
-
-    errs() << "\n";
   }
-  errs() << "\n\nUSchedule : " << USchedule << "\n\n";
 
   S.setSchedule(USchedule);
   osl_scop_free(OSLScop);
+
+  LLVM_DEBUG(errs() << "Importing OpenScop file done.\n");
 }
 
 PreservedAnalyses OpenSCoPImportPass::run(Scop &S, ScopAnalysisManager &SAM,
                                           ScopStandardAnalysisResults &SAR,
                                           SPMUpdater &) {
-  errs() << "Importing OpenScop for SCoP '" << S.getNameStr() << "\n";
+  LLVM_DEBUG(errs() << "Importing OpenScop for SCoP '" << S.getNameStr()
+                    << "\n");
 
   std::string FileName = getFileName(S, "", "scop");
+  std::string OldFileName = getFileName(S, "old_", "scop");
 
-  importOpenScop(S, FileName);
+  importOpenScop(S, FileName, OldFileName);
 
-  errs() << "End of importOpenScop\n\n\n";
+  LLVM_DEBUG(errs() << "End of importOpenScop\n");
   return PreservedAnalyses::all();
 }
