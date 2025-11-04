@@ -26,7 +26,8 @@ struct OpenSCoPExportPass final : llvm::PassInfoMixin<OpenSCoPExportPass> {
 /// This pass imports a scop from a openscop file. The filename is deduced from
 /// the concatenation of the function and scop name.
 struct OpenSCoPImportPass final : llvm::PassInfoMixin<OpenSCoPImportPass> {
-  static void importOpenScop(Scop &S, std::string FileName);
+  static void importOpenScop(Scop &S, std::string FileName,
+                             std::string OldFileName);
   llvm::PreservedAnalyses run(Scop &, ScopAnalysisManager &,
                               ScopStandardAnalysisResults &, SPMUpdater &);
 };
