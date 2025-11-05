@@ -678,11 +678,13 @@ void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
     Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For));
 
   if (Cond) {
+    errs() << "C'est une boucle parallel!\n";
     createForParallel(For);
     return;
   }
   bool Parallel = (IslAstInfo::isParallel(isl::manage_copy(For)) &&
                    !IslAstInfo::isReductionParallel(isl::manage_copy(For)));
+  errs() << "C'est une boucle sequential!\n";
   createForSequential(isl::manage(For).as<isl::ast_node_for>(), Parallel);
 }
 
@@ -1393,8 +1395,6 @@ Value *IslNodeBuilder::generateSCEV(const SCEV *Expr) {
 /// of this run-time check to false to be conservatively correct,
 Value *IslNodeBuilder::createRTC(isl_ast_expr *Condition) {
   auto ExprBuilder = getExprBuilder();
-
-  errs() << "RTC: " << isl::manage_copy(Condition).to_C_str() << "\n";
 
   // In case the AST expression has integers larger than 64 bit, bail out. The
   // resulting LLVM-IR will contain operations on types that use more than 64
