@@ -1756,28 +1756,20 @@ bool ScopBuilder::buildAccessSingleDim(MemAccInst Inst, ScopStmt *Stmt) {
 }
 
 void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
-  if (buildAccessMemIntrinsic(Inst, Stmt)) {
-    Inst->print(errs(), true);
+  if (buildAccessMemIntrinsic(Inst, Stmt))
     return;
-  }
 
-  if (buildAccessCallInst(Inst, Stmt)) {
-    Inst->print(errs(), true);
+  if (buildAccessCallInst(Inst, Stmt)) 
     return;
-  }
 
-  if (buildAccessMultiDimFixed(Inst, Stmt)) {
-    Inst->print(errs(), true);
+  if (buildAccessMultiDimFixed(Inst, Stmt)) 
     return;
-  }
 
-  if (buildAccessMultiDimParam(Inst, Stmt)) {
+  if (buildAccessMultiDimParam(Inst, Stmt))
     return;
-  }
 
-  if (buildAccessSingleDim(Inst, Stmt)) {
+  if (buildAccessSingleDim(Inst, Stmt)) 
     return;
-  }
 
   llvm_unreachable(
       "At least one of the buildAccess functions must handled this access, or "
