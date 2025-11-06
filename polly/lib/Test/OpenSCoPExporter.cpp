@@ -170,7 +170,6 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
   // Domain
   isl::set Domain = Stmt.getDomain();
   isl::basic_set_list BasicSetList = Domain.get_basic_set_list();
-  auto Size = unsignedFromIslSize(BasicSetList.size());
 
   std::vector<std::vector<long long>> Matrix;
   BasicSetList.foreach ([&](isl::basic_set BasicSet) -> isl::stat {
@@ -276,7 +275,26 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
       return isl::stat::ok();
     });
 
-    A->elt = osl_relation_malloc(Matrix3.size(),
+    std::vector<int> RowsToUse;
+    for (size_t I = 0; I < Matrix3.size(); ++I) {
+      bool UsedRow = false;
+      for (size_t J = 1; J <= extractDimValue(AccessMap, isl::dim::out) + 1;
+           ++J) {
+        if (Matrix3[I][J] != 0) {
+          RowsToUse.push_back(I);
+          UsedRow = true;
+          break;
+        }
+      }
+      if (not UsedRow) {
+        errs() << "Warning we remove some constraints from the access relation "
+                  "for array "
+               << AccessMap.get_tuple_id(isl::dim::out).get_name()
+               << " in statement " << Stmt.getBaseName() << "    " << I << "\n";
+      }
+    }
+
+    A->elt = osl_relation_malloc(RowsToUse.size(),
                                  2 + 1 /* Array*/ +
                                      extractDimValue(AccessMap, isl::dim::out) +
                                      NbAccessInputDims + NbAccessParams);
@@ -288,9 +306,10 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
     A->elt->nb_local_dims = 0;
     A->elt->nb_parameters = NbAccessParams;
 
-    for (size_t I = 0; I < Matrix3.size(); ++I) {
+    for (size_t I = 0; I < RowsToUse.size(); ++I) {
       for (size_t J = 0; J < Matrix3[I].size(); ++J) {
-        osl_int_set_si(OSL_PRECISION_DP, A->elt->m[I] + J, Matrix3[I][J]);
+        osl_int_set_si(OSL_PRECISION_DP, A->elt->m[I] + J,
+                       Matrix3[RowsToUse[I]][J]);
       }
     }
 
@@ -487,59 +506,6 @@ isl::map islScheduleStmtFromOsl(osl_statement_p OSLStmt, osl_scop_p OSLScop,
   return islScheduleStmtFromOsl(OSLStmt, OldOSLStmt, Space);
 }
 
-isl::map islAccessFromOsl(osl_relation_p Scattering, isl::space Space) {
-  isl::ctx Ctx = Space.ctx();
-
-  isl_mat *Ineq =
-      extractEquationsOSL<EquationType::Inequality>(Ctx, Scattering);
-  isl_mat *Eq = extractEquationsOSL<EquationType::Equality>(Ctx, Scattering);
-
-  // Remove osl column and row for array identifier
-  Eq = isl_mat_drop_rows(Eq, 0, 1);
-  Eq = isl_mat_drop_cols(Eq, 0, 1);
-  Ineq = isl_mat_drop_cols(Ineq, 0, 1);
-
-  isl::basic_map BasicMap = isl::manage(isl_basic_map_from_constraint_matrices(
-      Space.copy(), Eq, Ineq, isl_dim_out, isl_dim_in, isl_dim_div,
-      isl_dim_param, isl_dim_cst));
-
-  return isl::map(BasicMap);
-}
-
-isl::map islAccessFromOSL(osl_relation_p OSLAccess, polly::MemoryAccess *MA,
-                          Scop &S, osl_scop_p OSLScop,
-                          osl_statement_p OSLStmt) {
-  isl::id Id = MA->getId();
-
-  int NbParameter = osl_scop_get_nb_parameters(OSLScop);
-  int NbIterator = osl_statement_get_nb_iterators(OSLStmt);
-  int NbOutput = MA->getNumSubscripts();
-
-  auto NbParameterScop = static_cast<int>(
-      unsignedFromIslSize(S.getParamSpace().dim(isl::dim::param)));
-  if (NbParameter != NbParameterScop)
-    llvm_unreachable(
-        "Number of parameters into scop and openscop are different");
-
-  isl::space Space = S.getContext().space();
-  Space = Space.add_dims(isl::dim::in, NbIterator);
-  Space = Space.add_dims(isl::dim::out, NbOutput);
-
-  if (NbIterator > 0) {
-    osl_body_p StmtBody =
-        (osl_body_p)osl_generic_lookup(OSLStmt->extension, OSL_URI_BODY);
-    if (StmtBody) {
-      for (int I = 0; I < NbIterator; I++) {
-        Space = Space.set_dim_id(
-            isl::dim::in, I,
-            isl::id(S.getIslCtx(), StmtBody->iterators->string[I]));
-      }
-    }
-  }
-
-  return islAccessFromOsl(OSLAccess, Space);
-}
-
 ScopStmt &getStmtByName(Scop &S, StringRef Name) {
   for (ScopStmt &Stmt : S) {
     if (not strcmp(Stmt.getBaseName(), Name.data())) {
@@ -547,157 +513,6 @@ ScopStmt &getStmtByName(Scop &S, StringRef Name) {
     }
   }
   llvm_unreachable("Statement not found");
-}
-
-[[maybe_unused]] void importOpenScopTest(Scop &S, osl_scop_p OSLScop,
-                                         std::string FileName) {
-  errs() << "Test importOpenScopTest\n";
-
-  isl_ctx *Ctx = S.getIslCtx().get();
-  errs() << "Domain: " << S.getDomains() << "\n";
-
-  // Space
-
-  isl::space Space = isl::space::params_alloc(Ctx, 2);
-  Space = Space.set_dim_id(isl::dim::param, 0, "N");
-  Space = Space.set_dim_id(isl::dim::param, 1, "M");
-
-  // Context
-  isl::set Context = isl::set::universe(Space);
-  isl::local_space LocalSpace = isl::local_space(Space);
-  isl::constraint C01 = isl::constraint::alloc_inequality(LocalSpace);
-  C01 = C01.set_coefficient_si(isl::dim::param, 0, 1);
-  Context = Context.add_constraint(C01);
-  isl::constraint C02 = isl::constraint::alloc_inequality(LocalSpace);
-  C02 = C02.set_coefficient_si(isl::dim::param, 1, 1);
-  Context = Context.add_constraint(C02);
-
-  errs() << "Context: " << Context << "\n";
-
-  // Stmt1
-  isl::space Space1 = isl::space(Ctx, 2, 2);
-  Space1 = Space1.set_dim_id(isl::dim::set, 0, "i");
-  Space1 = Space1.set_dim_id(isl::dim::set, 1, "j");
-  Space1 = Space1.set_dim_id(isl::dim::param, 0, "N");
-  Space1 = Space1.set_dim_id(isl::dim::param, 1, "M");
-  errs() << "Space1: " << Space1 << "\n";
-
-  isl::set Set1 = isl::set::universe(Space1);
-  isl::local_space LocalSpace1 = isl::local_space(Space1);
-  isl::constraint C1 = isl::constraint::alloc_inequality(LocalSpace1);
-  C1 = C1.set_coefficient_si(isl::dim::set, 0, 1);
-  isl::constraint C2 = isl::constraint::alloc_inequality(LocalSpace1);
-  C2 = C2.set_coefficient_si(isl::dim::set, 0, -1);
-  C2 = C2.set_coefficient_si(isl::dim::param, 0, 1);
-  isl::constraint C3 = isl::constraint::alloc_inequality(LocalSpace1);
-  C3 = C3.set_coefficient_si(isl::dim::set, 1, 1);
-  isl::constraint C4 = isl::constraint::alloc_inequality(LocalSpace1);
-  C4 = C4.set_coefficient_si(isl::dim::set, 1, -1);
-  C4 = C4.set_coefficient_si(isl::dim::param, 1, 1);
-
-  Set1 = Set1.add_constraint(C1);
-  Set1 = Set1.add_constraint(C2);
-  Set1 = Set1.add_constraint(C3);
-  Set1 = Set1.add_constraint(C4);
-
-  isl::id Id1 = isl::id::alloc(Ctx, "chien", nullptr);
-  Set1 = Set1.set_tuple_id(Id1);
-
-  errs() << "Set1: " << Set1 << "\n";
-
-  isl::union_set USet1 = isl::union_set(Set1);
-  errs() << "USet1: " << USet1 << "\n";
-
-  auto StmtSchedule1 = isl::schedule::from_domain(USet1);
-  errs() << "Initial schedule 1: " << StmtSchedule1 << "\n";
-
-  // Stmt2
-  isl::space Space2 = isl::space(Ctx, 2, 2);
-  Space2 = Space2.set_dim_id(isl::dim::set, 0, "i");
-  Space2 = Space2.set_dim_id(isl::dim::set, 1, "j");
-  Space2 = Space2.set_dim_id(isl::dim::param, 0, "N");
-  Space2 = Space2.set_dim_id(isl::dim::param, 1, "M");
-  errs() << "Space2: " << Space2 << "\n";
-
-  isl::set Set2 = isl::set::universe(Space2);
-  isl::local_space LocalSpace2 = isl::local_space(Space2);
-  C1 = isl::constraint::alloc_inequality(LocalSpace1);
-  C1 = C1.set_coefficient_si(isl::dim::set, 0, 1);
-  C2 = isl::constraint::alloc_inequality(LocalSpace1);
-  C2 = C2.set_coefficient_si(isl::dim::set, 0, -1);
-  C2 = C2.set_coefficient_si(isl::dim::param, 0, 1);
-
-  C3 = isl::constraint::alloc_inequality(LocalSpace1);
-  C3 = C3.set_coefficient_si(isl::dim::set, 1, 1);
-  C4 = isl::constraint::alloc_inequality(LocalSpace1);
-  C4 = C4.set_coefficient_si(isl::dim::set, 1, -1);
-  C4 = C4.set_coefficient_si(isl::dim::param, 1, 1);
-
-  Set2 = Set2.add_constraint(C1);
-  Set2 = Set2.add_constraint(C2);
-  Set2 = Set2.add_constraint(C3);
-  Set2 = Set2.add_constraint(C4);
-
-  isl::id Id2 = isl::id::alloc(Ctx, "chat", nullptr);
-  Set2 = Set2.set_tuple_id(Id2);
-
-  errs() << "Set2: " << Set2 << "\n";
-
-  isl::union_set USet2 = isl::union_set(Set2);
-  errs() << "USet2: " << USet2 << "\n";
-
-  auto StmtSchedule2 = isl::schedule::from_domain(USet2);
-  errs() << "Initial schedule 2: " << StmtSchedule2 << "\n";
-
-  isl::schedule StmtSchedule = StmtSchedule1.sequence(StmtSchedule2);
-  errs() << "Final schedule: " << StmtSchedule << "\n";
-
-  //////////
-  auto MapToDimension = [&](isl::union_set Domain, unsigned N) {
-    errs() << "Domain: " << Domain << "\n";
-
-    auto Result = isl::union_pw_multi_aff::empty(Domain.get_space());
-    errs() << "\n\nResult: " << Result << "\n";
-
-    for (isl::set S : Domain.get_set_list()) {
-      errs() << "Set: " << S << "\n";
-      unsigned Dim = unsignedFromIslSize(S.tuple_dim());
-
-      auto PMA = isl::pw_multi_aff::project_out_map(S.get_space(),
-                                                    isl::dim::set, N, Dim - N);
-      errs() << "PMA: " << PMA << "\n";
-      if (N > 1)
-        PMA = PMA.drop_dims(isl::dim::out, 0, N - 1);
-
-      Result = Result.add_pw_multi_aff(PMA);
-      errs() << "Result: " << Result << "\n";
-    }
-
-    auto MUPA = isl::multi_union_pw_aff(isl::union_pw_multi_aff(Result));
-    errs() << "MUPA: " << MUPA << "\n";
-
-    return MUPA;
-  };
-
-  isl::union_set Domain = StmtSchedule.get_domain();
-  StmtSchedule =
-      StmtSchedule.insert_partial_schedule(MapToDimension(Domain, 2));
-  errs() << "Final schedule with MUPA: " << StmtSchedule << "\n";
-  StmtSchedule =
-      StmtSchedule.insert_partial_schedule(MapToDimension(Domain, 1));
-  errs() << "Final schedule with MUPA: " << StmtSchedule << "\n";
-
-  isl_ast_build *Build = isl_ast_build_from_context(Context.copy());
-  errs() << "Context " << S.getContext() << "\n";
-
-  isl::ast_node Root = isl::manage(
-      isl_ast_build_node_from_schedule(Build, StmtSchedule.release()));
-
-  isl_ast_build_free(Build);
-
-  errs() << "AST root " << Root << "\n";
-
-  errs() << "End of test importOpenScopTest\n\n\n";
 }
 
 SmallVector<std::pair<int, int>, 4>

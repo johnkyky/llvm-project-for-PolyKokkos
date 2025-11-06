@@ -39,10 +39,8 @@ std::string exec(const char *Command) {
 
   std::unique_ptr<FILE, decltype(&pclose)> Pipe(popen(Command, "r"), pclose);
 
-  if (!Pipe) {
-    errs() << "popen() failed!\n";
-    return "";
-  }
+  if (!Pipe)
+    report_fatal_error("PlutoScheduleOptimizerPass: popen() failed!");
 
   while (fgets(Buffer.data(), Buffer.size(), Pipe.get()) != nullptr) {
     Result += Buffer.data();
@@ -61,8 +59,12 @@ std::string extractOpenScopFromString(std::string &Input) {
 
 void saveToFile(const std::string &Filename, const std::string &Content) {
   std::ofstream Outfile(Filename);
-  if (!Outfile)
-    llvm_unreachable("Erreur d'ouverture du fichier");
+  if (!Outfile) {
+    std::string Msg = "PlutoScheduleOptimizerPass: Could not open file " +
+                      Filename + " for writing!";
+    report_fatal_error(Msg.c_str());
+  }
+
   Outfile << Content;
   Outfile.close();
 }
