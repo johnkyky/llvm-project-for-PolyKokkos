@@ -1759,16 +1759,16 @@ void ScopBuilder::buildMemoryAccess(MemAccInst Inst, ScopStmt *Stmt) {
   if (buildAccessMemIntrinsic(Inst, Stmt))
     return;
 
-  if (buildAccessCallInst(Inst, Stmt)) 
+  if (buildAccessCallInst(Inst, Stmt))
     return;
 
-  if (buildAccessMultiDimFixed(Inst, Stmt)) 
+  if (buildAccessMultiDimFixed(Inst, Stmt))
     return;
 
   if (buildAccessMultiDimParam(Inst, Stmt))
     return;
 
-  if (buildAccessSingleDim(Inst, Stmt)) 
+  if (buildAccessSingleDim(Inst, Stmt))
     return;
 
   llvm_unreachable(
