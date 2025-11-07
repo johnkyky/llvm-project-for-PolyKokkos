@@ -263,6 +263,42 @@ bool moveInnerLoopLoad(Function &F) {
       Res = Lambda(Size, "hoistedDim");
     }
   }
+
+  // All loads directly come from Kokkos lambda and are safe to hoist
+  for (auto &BB : F) {
+    for (auto It = BB.begin(); It != BB.end();) {
+      Instruction *I = &*It;
+      ++It;
+      if (auto *LoadInst = dyn_cast<llvm::LoadInst>(I)) {
+        errs() << "Load found: " << *LoadInst << "\n";
+        Value *Ptr = LoadInst->getPointerOperand();
+        auto *GEP = dyn_cast<GetElementPtrInst>(Ptr);
+        if (!GEP)
+          continue;
+        errs() << "\t\tet son GEP: " << *GEP << "\n";
+
+        if (GEP->getParent() == LoadInst->getParent())
+          continue;
+
+        Value *BasePtr = GEP->getPointerOperand();
+        Value *FirstIndex = GEP->getOperand(1);
+        if (not isa<Argument>(BasePtr) and not isa<ConstantInt>(FirstIndex))
+          continue;
+
+        errs() << "on deplace le load: " << *LoadInst << " vers "
+               << *(GEP->getNextNode()) << "\n";
+
+        IRBuilder<> Builder(GEP->getNextNode());
+        auto *HoistedLoad = Builder.CreateLoad(LoadInst->getType(), GEP);
+        HoistedLoad->setName(LoadInst->getName() + "PIPI");
+        errs() << "\t\tHoistedLoad: " << *HoistedLoad << "\n";
+        //
+        LoadInst->replaceAllUsesWith(HoistedLoad);
+        LoadInst->eraseFromParent();
+      }
+    }
+  }
+
   return Res;
 }
 
@@ -441,11 +477,10 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass run on " << F.getName()
                     << "\n");
 
-  bool Changed = false;
-  Changed |= readBackend(F);
-  Changed |= extractLoopBoundAnnotation(F, FM.getResult<LoopAnalysis>(F),
-                                        FM.getResult<DominatorTreeAnalysis>(F));
-  Changed |= moveInnerLoopLoad(F);
+  readBackend(F);
+  extractLoopBoundAnnotation(F, FM.getResult<LoopAnalysis>(F),
+                             FM.getResult<DominatorTreeAnalysis>(F));
+  moveInnerLoopLoad(F);
   if (F.hasFnAttribute("polly.backend")) {
     llvm::Attribute Attr = F.getFnAttribute("polly.backend");
     llvm::StringRef Value = Attr.getValueAsString();
@@ -453,5 +488,5 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   }
 
   LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass done\n");
-  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  return PreservedAnalyses::none();
 }
