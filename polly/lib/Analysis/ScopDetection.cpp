@@ -1628,7 +1628,8 @@ void ScopDetection::removeCachedResults(const Region &R) {
 }
 
 void ScopDetection::findScops(Region &R) {
-  LLVM_DEBUG(errs() << "Analyzing Region\n" << R.getNameStr() << "\n");
+  LLVM_DEBUG(errs() << "\nAnalyzing Region\n"; R.print(errs()););
+
   std::unique_ptr<DetectionContext> &Entry =
       DetectionContextMap[getBBPairForRegion(&R)];
   Entry = std::make_unique<DetectionContext>(R, AA, /*Verifying=*/false);
