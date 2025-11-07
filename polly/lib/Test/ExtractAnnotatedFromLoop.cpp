@@ -270,12 +270,10 @@ bool moveInnerLoopLoad(Function &F) {
       Instruction *I = &*It;
       ++It;
       if (auto *LoadInst = dyn_cast<llvm::LoadInst>(I)) {
-        errs() << "Load found: " << *LoadInst << "\n";
         Value *Ptr = LoadInst->getPointerOperand();
         auto *GEP = dyn_cast<GetElementPtrInst>(Ptr);
         if (!GEP)
           continue;
-        errs() << "\t\tet son GEP: " << *GEP << "\n";
 
         if (GEP->getParent() == LoadInst->getParent())
           continue;
@@ -285,14 +283,9 @@ bool moveInnerLoopLoad(Function &F) {
         if (not isa<Argument>(BasePtr) and not isa<ConstantInt>(FirstIndex))
           continue;
 
-        errs() << "on deplace le load: " << *LoadInst << " vers "
-               << *(GEP->getNextNode()) << "\n";
-
         IRBuilder<> Builder(GEP->getNextNode());
         auto *HoistedLoad = Builder.CreateLoad(LoadInst->getType(), GEP);
         HoistedLoad->setName(LoadInst->getName() + "PIPI");
-        errs() << "\t\tHoistedLoad: " << *HoistedLoad << "\n";
-        //
         LoadInst->replaceAllUsesWith(HoistedLoad);
         LoadInst->eraseFromParent();
       }
