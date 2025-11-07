@@ -21,6 +21,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include <string>
 
 using namespace llvm;
 using namespace polly;
@@ -76,10 +77,7 @@ public:
 std::string polly::getFileName(Function &F, StringRef Suffix = "",
                                StringRef Extension = "jscop") {
   std::string FunctionName = F.getName().str();
-  std::string FileName = FunctionName + "." + Extension.str();
-
-  if (Suffix != "")
-    FileName += "." + Suffix.str();
+  std::string FileName = FunctionName + Suffix.str() + "." + Extension.str();
 
   if (FileName.size() > 128) {
     std::hash<std::string> Hasher;
@@ -95,18 +93,20 @@ std::string polly::getFileName(Function &F, StringRef Suffix = "",
 std::string polly::getFileName(Scop &S, StringRef Suffix = "",
                                StringRef Extension = "jscop") {
   std::string FunctionName = S.getFunction().getName().str();
-  std::string FileName =
-      FunctionName + "_" + S.getNameStr() + "." + Extension.str();
+  std::string FileName = FunctionName + "_" + S.getNameStr() + Suffix.str() +
+                         "." + Extension.str();
 
-  if (Suffix != "")
-    FileName += "." + Suffix.str();
-
+  std::hash<std::string> Hasher;
+  std::string FunctionNameHash = std::to_string(Hasher(FunctionName));
   if (FileName.size() > 128) {
-    std::hash<std::string> Hasher;
-    size_t Hash = Hasher(FunctionName);
-
-    FileName = "func_" + std::to_string(Hash) + "_" + S.getNameStr() +
+    FileName = "func_" + FunctionNameHash + "_" + S.getNameStr() +
                Suffix.str() + "." + Extension.str();
+  }
+
+  std::string SCoPNameHash = std::to_string(Hasher(S.getNameStr()));
+  if (FileName.size() > 128) {
+    FileName = "func_" + FunctionNameHash + "_" + SCoPNameHash + Suffix.str() +
+               "." + Extension.str();
   }
 
   return FileName;
