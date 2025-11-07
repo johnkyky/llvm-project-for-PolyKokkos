@@ -48,6 +48,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Value.h"
@@ -2333,6 +2334,8 @@ void ScopBuilder::updateAccessDimensionality() {
     if (not Access->getAccessInstruction())
       return false;
     if (auto MemInst = MemAccInst::dyn_cast(Access->getAccessInstruction())) {
+      if (isa<IntrinsicInst>(*MemInst))
+        return false;
       Value *Ptr = MemInst.getPointerOperand();
       Loop *L = LI.getLoopFor(MemInst->getParent());
       const SCEV *AccessFunction = SE.getSCEVAtScope(Ptr, L);
