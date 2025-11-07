@@ -636,7 +636,8 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
 
   FILE *File = std::fopen(FileName.c_str(), "w");
   if (!File)
-    llvm_unreachable("Could not open the OpenSCoP file for writing.");
+    llvm_unreachable("OpenSCoPExportPass::exportOpenScop Could not open the "
+                     "OpenSCoP file for writing.");
 
   osl_scop_print(File, OSLScop);
   osl_scop_free(OSLScop);
@@ -664,26 +665,30 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName,
 
   FILE *File = std::fopen(FileName.c_str(), "r");
   if (!File)
-    llvm_unreachable("Could not open the OpenSCoP file for writing.");
+    llvm_unreachable("OpenSCoPImportPass::importOpenScop Could not open the "
+                     "OpenSCoP file for writing.");
 
   osl_scop_p OSLScop = osl_scop_read(File);
 
   std::fclose(File);
 
   if (!OSLScop)
-    llvm_unreachable("Could not read the OpenSCoP file.");
+    llvm_unreachable(
+        "OpenSCoPImportPass::importOpenScop Could not read the OpenSCoP file.");
 
   //
   File = std::fopen(OldFileName.c_str(), "r");
   if (!File)
-    llvm_unreachable("Could not open the OpenSCoP file for writing.");
+    llvm_unreachable("OpenSCoPImportPass::importOpenScop Could not open the "
+                     "OpenSCoP file for writing.");
 
   osl_scop_p OldOSLScop = osl_scop_read(File);
 
   std::fclose(File);
 
   if (!OldOSLScop)
-    llvm_unreachable("Could not read the OpenSCoP file.");
+    llvm_unreachable(
+        "OpenSCoPImportPass::importOpenScop Could not read the OpenSCoP file.");
 
   isl_ctx *Ctx = S.getIslCtx().get();
 
