@@ -12,6 +12,7 @@
 #include "polly/Test/UserAssumptions.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/LoopFusion.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include <charconv>
@@ -565,6 +566,10 @@ PreservedAnalyses UserAssumptions::run(Function &F,
 
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   applyAssumptions(F, Assumptions, DT);
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error("IR verification failed.");
+  }
 
   LLVM_DEBUG(errs() << "UserAssumptions pass done\n");
   return PreservedAnalyses::all();

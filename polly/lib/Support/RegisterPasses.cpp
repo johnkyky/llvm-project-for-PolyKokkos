@@ -320,12 +320,12 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
   PM.addPass(CodePreparationPass());
-  PM.addPass(ExtractAnnotatedFromLoop());
-  PM.addPass(llvm::DCEPass());
   PM.addPass(RemoveLoopVersioningPass());
   PM.addPass(SimplifyCFGPass());
-  PM.addPass(UserAssumptions());
+  PM.addPass(ExtractAnnotatedFromLoop());
+  PM.addPass(llvm::DCEPass());
   PM.addPass(LoopFusionPass());
+  PM.addPass(UserAssumptions());
   PM.addPass(ArrayFusion());
   PM.addPass(SimplifyCFGPass());
   PM.addPass(llvm::DCEPass());
