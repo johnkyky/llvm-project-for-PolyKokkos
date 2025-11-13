@@ -32,11 +32,7 @@ namespace {
 
 void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
   for (BasicBlock &BB : F) {
-    // errs() << "Visiting block: " << BB.getName() << "\n";
-    if (LI.getLoopFor(&BB) != nullptr) {
-      // errs() << "Skipping block inside loop\n";
-      continue;
-    }
+    // errs() << "\n\nVisiting block: " << BB.getName() << "\n";
 
     Instruction *Term = BB.getTerminator();
     // errs() << "Terminator: " << *Term << "\n";
