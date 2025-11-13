@@ -100,6 +100,7 @@ add_llvm_pass_plugin(Polly
   Test/UserAssumptions.cpp
   Test/CheckParallelism.cpp
   Test/ArrayFusion.cpp
+  Test/RemoveLoopVersioning.cpp
 
   ${POLLY_HEADER_FILES}
 

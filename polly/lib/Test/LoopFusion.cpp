@@ -19,6 +19,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -129,6 +130,9 @@ void implMoveBlock(Loop *L1, Loop *L2, BasicBlock *BlockToMove,
   };
 
   // errs() << "Moving block: " << *BlockToMove << "\n";
+  // for (auto *Pred : llvm::predecessors(BlockToMove)) {
+  //   errs() << "  Predecessor: " << Pred->getName() << "\n";
+  // }
   BasicBlock *SrcPredBlock = ValidBlock(llvm::predecessors(BlockToMove));
   // errs() << "Source predecessor: " << *SrcPredBlock << "\n";
   BasicBlock *SrcNextBlock = ValidBlock(llvm::successors(BlockToMove));
@@ -283,7 +287,7 @@ unsigned getValidCondition(const Instruction *LeftOp,
 void removeLoopBoundConditions(Function &F,
                                const SmallVector<LoopBoundT, 4> LoopBounds) {
 
-  auto CheckInstInLoopBounds = [&](const Instruction *LHSInst,
+  auto CheckInstIsLoopBounds = [&](const Instruction *LHSInst,
                                    const Instruction *RHSInst) {
     const auto *ItLeft =
         std::find_if(LoopBounds.begin(), LoopBounds.end(),
@@ -313,7 +317,7 @@ void removeLoopBoundConditions(Function &F,
         const auto *LHSInst = dyn_cast<Instruction>(LHS);
         const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-        if (not CheckInstInLoopBounds(LHSInst, RHSInst))
+        if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
           continue;
 
         auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
@@ -330,7 +334,7 @@ void removeLoopBoundConditions(Function &F,
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-          if (not CheckInstInLoopBounds(LHSInst, RHSInst))
+          if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
             continue;
 
           IndexOp = getValidCondition(LHSInst, Pred, RHSInst);
@@ -345,15 +349,21 @@ void removeLoopBoundConditions(Function &F,
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-          if (not CheckInstInLoopBounds(LHSInst, RHSInst))
+          if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
             continue;
 
           auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
           BranchInst::Create(NextBB, Branch);
           Branch->eraseFromParent();
         }
-      } else
-        report_fatal_error("Unknown branch condition type");
+      } else if (isa<FCmpInst>(Cond)) {
+        // Do nothing for floating point comparisons for now
+      } else {
+        std::string Msg =
+            "Unknown branch condition type : " + Cond->getName().str();
+        StringRef MsgRef(Msg);
+        report_fatal_error(MsgRef);
+      }
     }
   }
   return;
@@ -370,9 +380,14 @@ PreservedAnalyses LoopFusionPass::run(Function &F,
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
   removeLoopBoundConditions(F, LBA);
 
-  auto Loops = findLoop(F, AM.getResult<LoopAnalysis>(F),
-                        AM.getResult<DominatorTreeAnalysis>(F));
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto Loops = findLoop(F, LI, DT);
   moveBlockBetweenLoops(Loops);
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error("IR verification failed.");
+  }
 
   errs() << "LoopFusionPass pass done\n";
 

@@ -48,6 +48,7 @@
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
+#include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/Test/ScheduleOptimizer.h"
 #include "polly/Test/UserAssumptions.h"
 #include "llvm/Analysis/CFGPrinter.h"
@@ -57,6 +58,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 
 namespace cl = llvm::cl;
 
@@ -320,9 +322,12 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(CodePreparationPass());
   PM.addPass(ExtractAnnotatedFromLoop());
   PM.addPass(llvm::DCEPass());
+  PM.addPass(RemoveLoopVersioningPass());
+  PM.addPass(SimplifyCFGPass());
   PM.addPass(UserAssumptions());
   PM.addPass(LoopFusionPass());
   PM.addPass(ArrayFusion());
+  PM.addPass(SimplifyCFGPass());
   PM.addPass(llvm::DCEPass());
   // PM.addPass(FunctionPassTest());
 

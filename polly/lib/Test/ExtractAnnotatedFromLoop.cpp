@@ -285,7 +285,7 @@ bool moveInnerLoopLoad(Function &F) {
 
         IRBuilder<> Builder(GEP->getNextNode());
         auto *HoistedLoad = Builder.CreateLoad(LoadInst->getType(), GEP);
-        HoistedLoad->setName(LoadInst->getName() + "PIPI");
+        HoistedLoad->setName(LoadInst->getName() + "hoistedParam");
         LoadInst->replaceAllUsesWith(HoistedLoad);
         LoadInst->eraseFromParent();
       }

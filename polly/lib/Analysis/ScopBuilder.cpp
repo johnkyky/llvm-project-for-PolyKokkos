@@ -3683,6 +3683,8 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
 
   addUserAssumptions(AC, InvalidDomainMap);
 
+  LLVM_DEBUG(errs() << "scop after addUserAssumptions : " << *scop << "\n");
+
   // Initialize the invalid domain.
   for (ScopStmt &Stmt : scop->Stmts)
     if (Stmt.isBlockStmt())
