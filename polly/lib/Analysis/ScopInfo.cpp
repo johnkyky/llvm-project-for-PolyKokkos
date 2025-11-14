@@ -1668,11 +1668,9 @@ void Scop::removeStmts(function_ref<bool(ScopStmt &)> ShouldDelete,
                        bool AfterHoisting) {
   for (auto StmtIt = Stmts.begin(), StmtEnd = Stmts.end(); StmtIt != StmtEnd;) {
     if (!ShouldDelete(*StmtIt)) {
-      // errs() << "\t\t\t\t\t\t\t\t\ton fait rien\n";
       StmtIt++;
       continue;
     }
-    // errs() << "\t\t\t\t\t\t\t\t\ton fait sup\n";
 
     // Start with removing all of the statement's accesses including erasing it
     // from all maps that are pointing to them.
