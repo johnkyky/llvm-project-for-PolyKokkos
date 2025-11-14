@@ -2348,6 +2348,9 @@ void ScopBuilder::updateAccessDimensionality() {
 
       auto *BPInstr = dyn_cast<Instruction>(BV);
 
+      if (SD.getAD()->Map.find(BPInstr) == SD.getAD()->Map.end())
+        return false;
+
       auto B = SD.getAD()->Map[BPInstr];
       if (not B.Sizes.empty())
         return true;
