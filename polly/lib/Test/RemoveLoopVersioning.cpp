@@ -34,6 +34,12 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
   for (BasicBlock &BB : F) {
     // errs() << "\n\nVisiting block: " << BB.getName() << "\n";
 
+    // check if block have itself in its successors (loop backedge)
+    if (std::find(succ_begin(&BB), succ_end(&BB), &BB) != succ_end(&BB)) {
+      // errs() << "Skipping block with self-loop\n";
+      continue;
+    }
+
     Instruction *Term = BB.getTerminator();
     // errs() << "Terminator: " << *Term << "\n";
 
@@ -66,7 +72,6 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
           continue;
         }
 
-        // Verifier si VariableOp est une instruction issue d'une loop bound
         bool IsLoopBound = false;
         for (auto &U : VariableOp->uses()) {
           Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
