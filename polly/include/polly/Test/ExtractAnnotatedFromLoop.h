@@ -23,7 +23,7 @@ std::pair<CallInst *, StringRef> isAnnotationInstruction(Instruction *Instr,
                                                          StringRef StrStart);
 
 using SizesT = std::vector<Instruction *>;
-using NameT = StringRef;
+using NameT = std::string;
 
 struct ArrayData {
   NameT Name;

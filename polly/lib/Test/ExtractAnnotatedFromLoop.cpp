@@ -89,7 +89,7 @@ AnnotationData extractArrayInfo(Function &F) {
           continue;
 
         bool HasName = false;
-        StringRef StrRefName;
+        std::string StrName;
         if (auto *CE = dyn_cast<ConstantExpr>(Op)) {
           if (CE->getOpcode() == Instruction::PtrToInt) {
             Value *PtrOperand = CE->getOperand(0);
@@ -101,7 +101,7 @@ AnnotationData extractArrayInfo(Function &F) {
                   if (auto *Array = dyn_cast<ConstantDataArray>(FirstElem)) {
                     if (Array->isCString()) {
                       HasName = true;
-                      StrRefName = Array->getAsCString();
+                      StrName = Array->getAsCString();
                     }
                   }
                 }
@@ -142,7 +142,7 @@ AnnotationData extractArrayInfo(Function &F) {
         }
 
         std::reverse(S.begin(), S.end());
-        Anno.Map.insert({ArrayInst, {StrRefName, S}});
+        Anno.Map.insert({ArrayInst, {StrName, S}});
       }
     }
   }
