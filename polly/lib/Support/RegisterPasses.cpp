@@ -48,6 +48,7 @@
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
+#include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/Test/ScheduleOptimizer.h"
 #include "polly/Test/UserAssumptions.h"
@@ -323,7 +324,9 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(RemoveLoopVersioningPass());
   PM.addPass(SimplifyCFGPass());
   PM.addPass(ExtractAnnotatedFromLoop());
+  PM.addPass(RemoveLoopBoundConditionPass());
   PM.addPass(llvm::DCEPass());
+  PM.addPass(SimplifyCFGPass());
   PM.addPass(LoopFusionPass());
   PM.addPass(UserAssumptions());
   PM.addPass(ArrayFusion());
