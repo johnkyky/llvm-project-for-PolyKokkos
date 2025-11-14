@@ -11,6 +11,7 @@
 
 #include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/ScopDetectionDiagnostic.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
@@ -29,6 +30,53 @@ using namespace llvm;
 using namespace polly;
 
 namespace {
+
+bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
+  llvm::SmallVector<Instruction *, 4> InstructionToTest;
+  for (auto &U : Val->uses()) {
+    Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
+    if (not UserInst)
+      continue;
+
+    if (isa<ZExtInst>(UserInst) or isa<SExtInst>(UserInst) or
+        isa<TruncInst>(UserInst)) {
+      for (auto &UU : UserInst->uses()) {
+        Instruction *UserUserInst = dyn_cast<Instruction>(UU.getUser());
+        if (not UserUserInst)
+          continue;
+        InstructionToTest.push_back(UserUserInst);
+      }
+    } else {
+      InstructionToTest.push_back(UserInst);
+    }
+  }
+
+  for (auto &UserInst : InstructionToTest) {
+    // errs() << "User instruction: " << *UserInst << "\n";
+    if (not UserInst)
+      continue;
+
+    ICmpInst *CmpInst = dyn_cast<ICmpInst>(UserInst);
+    if (not CmpInst)
+      continue;
+    BasicBlock *CmpBlock = CmpInst->getParent();
+    auto *Loop = LI.getLoopFor(CmpBlock);
+    if (not Loop)
+      continue;
+
+    if (BranchInst *BI = dyn_cast<BranchInst>(CmpBlock->getTerminator())) {
+      if (BI->isConditional() && BI->getCondition() == CmpInst) {
+        if (Loop->isLoopExiting(CmpBlock)) {
+          return true;
+          // errs() << "  [FOUND] Cette instruction est une condition "
+          //        << "de sortie de boucle !\n";
+          break;
+        }
+      }
+    }
+  }
+  return false;
+}
 
 void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
   for (BasicBlock &BB : F) {
@@ -72,34 +120,7 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
           continue;
         }
 
-        bool IsLoopBound = false;
-        for (auto &U : VariableOp->uses()) {
-          Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
-          // errs() << "User instruction: " << *UserInst << "\n";
-          if (not UserInst)
-            continue;
-
-          ICmpInst *CmpInst = dyn_cast<ICmpInst>(UserInst);
-          if (not CmpInst)
-            continue;
-          BasicBlock *CmpBlock = CmpInst->getParent();
-          auto *Loop = LI.getLoopFor(CmpBlock);
-          if (not Loop)
-            continue;
-
-          if (BranchInst *BI =
-                  dyn_cast<BranchInst>(CmpBlock->getTerminator())) {
-            if (BI->isConditional() && BI->getCondition() == CmpInst) {
-              if (Loop->isLoopExiting(CmpBlock)) {
-                IsLoopBound = true;
-                // errs() << "  [FOUND] Cette instruction est une condition "
-                //        << "de sortie de boucle !\n";
-                break;
-              }
-            }
-          }
-        }
-        if (not IsLoopBound) {
+        if (not isLoopBoundCondition(VariableOp, LI)) {
           // errs() << "Variable operand is not from a loop bound, skipping\n";
           continue;
         }
