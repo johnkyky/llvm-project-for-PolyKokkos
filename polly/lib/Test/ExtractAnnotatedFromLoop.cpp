@@ -143,6 +143,8 @@ AnnotationData extractArrayInfo(Function &F) {
 
         std::reverse(S.begin(), S.end());
         Anno.Map.insert({ArrayInst, {StrName, S}});
+
+        It--;
       }
     }
   }
