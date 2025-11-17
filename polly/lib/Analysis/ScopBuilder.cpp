@@ -1074,8 +1074,12 @@ bool ScopBuilder::propagateInvalidStmtDomains(
       // Check if the maximal number of domain disjunctions was reached.
       // In case this happens we will bail.
       if (unsignedFromIslSize(SuccInvalidDomain.n_basic_set()) <
-          MaxDisjunctsInDomain)
+          MaxDisjunctsInDomain) {
+        LLVM_DEBUG(
+            errs() << "ScopBuilder::propagateInvalidStmtDomains : nb of "
+                      "invalid basic sets is bigger than limit for block\n";);
         continue;
+      }
 
       InvalidDomainMap.erase(BB);
       scop->invalidate(COMPLEXITY, TI->getDebugLoc(), TI->getParent());
