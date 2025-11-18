@@ -113,8 +113,14 @@ static isl_stat readMapConstraintsAccess(__isl_take isl_constraint *Constraint,
                                          void *User) {
   auto *Mat = static_cast<std::vector<std::vector<long long>> *>(User);
   std::vector<long long> Row;
+  errs() << "Reading access constraint\n";
 
   Row.push_back(isl_constraint_is_equality(Constraint) ? 0 : 1);
+  if (isl_constraint_is_equality(Constraint) == 0) {
+    errs() << "Warning: we have an inequality in an access relation\n";
+    isl_constraint_free(Constraint);
+    return isl_stat_ok;
+  }
 
   Row.push_back(0);
 
@@ -124,16 +130,21 @@ static isl_stat readMapConstraintsAccess(__isl_take isl_constraint *Constraint,
   int NbParam = isl_space_dim(Space, isl_dim_param);
   isl_space_free(Space);
 
+  bool Valid = false;
   for (int I = 0; I < NbOut; I++) {
     isl_val *V = isl_constraint_get_coefficient_val(Constraint, isl_dim_out, I);
     Row.push_back(isl_val_get_num_si(V));
     isl_val_free(V);
+    if (Row[Row.size() - 1] != 0)
+      Valid = true;
   }
 
   for (int I = 0; I < NbIn; I++) {
     isl_val *V = isl_constraint_get_coefficient_val(Constraint, isl_dim_in, I);
     Row.push_back(isl_val_get_num_si(V));
     isl_val_free(V);
+    if (Row[Row.size() - 1] != 0)
+      Valid = true;
   }
 
   for (int I = 0; I < NbParam; I++) {
@@ -147,6 +158,11 @@ static isl_stat readMapConstraintsAccess(__isl_take isl_constraint *Constraint,
   Row.push_back(isl_val_get_num_si(V));
   isl_val_free(V);
 
+  if (not Valid) {
+    errs() << "Warning we remove some constraints from the access relation\n";
+    isl_constraint_free(Constraint);
+    return isl_stat_ok;
+  }
   Mat->push_back(std::move(Row));
   isl_constraint_free(Constraint);
   return isl_stat_ok;
@@ -257,6 +273,13 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
     std::vector<std::vector<long long>> Matrix3;
     isl::basic_map_list BasicAccessMapList = AccessMap.get_basic_map_list();
 
+    errs() << unsignedFromIslSize(BasicAccessMapList.size())
+           << " basic access maps\n";
+    for (auto BM : BasicAccessMapList) {
+      errs() << "  " << BM << "\n";
+    }
+
+    errs() << AccessMap << "\n";
     BasicAccessMapList.foreach ([&](isl::basic_map BM) -> isl::stat {
       std::vector<long long> Row(2 + 1 /* Array*/ +
                                      extractDimValue(AccessMap, isl::dim::out) +
@@ -275,6 +298,27 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
       return isl::stat::ok();
     });
 
+    std::set<unsigned> ToRemove;
+    // remove identical rows
+    for (size_t I = 0; I < Matrix3.size(); ++I) {
+      for (size_t J = I + 1; J < Matrix3.size(); ++J) {
+        if (Matrix3[I] == Matrix3[J]) {
+          ToRemove.insert(J);
+        }
+      }
+    }
+
+    size_t CurrentIndex = 0;
+    auto NewEnd =
+        std::remove_if(Matrix3.begin(), Matrix3.end(), [&](const auto &) {
+          bool Delete = (ToRemove.count(CurrentIndex) > 0);
+          CurrentIndex++;
+          return Delete;
+        });
+
+    Matrix3.erase(NewEnd, Matrix3.end());
+
+    errs() << "Size matrix3: " << Matrix3.size() << "\n";
     std::vector<int> RowsToUse;
     for (size_t I = 0; I < Matrix3.size(); ++I) {
       bool UsedRow = false;
@@ -312,6 +356,13 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
                        Matrix3[RowsToUse[I]][J]);
       }
     }
+    for (auto R : RowsToUse) {
+      errs() << "Row: ";
+      for (auto V : Matrix3[R]) {
+        errs() << V << " ";
+      }
+      errs() << "\n";
+    }
 
     osl_body_p Body = osl_body_malloc();
     Body->iterators = osl_strings_malloc();
@@ -335,7 +386,10 @@ osl_statement_p convertStmt(ScopStmt &Stmt,
     OSLStmt->extension->interface = osl_body_interface();
     OSLStmt->extension->data = Body;
 
+    errs() << "Adding access relation\n";
+    osl_relation_list_print(stderr, A);
     osl_relation_list_add(&OSLStmt->access, A);
+    errs() << "Access relation added\n";
   }
   return OSLStmt;
 }
@@ -631,7 +685,10 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   // Statements
   for (ScopStmt &Stmt : S) {
     osl_statement_p OSLStmt = convertStmt(Stmt, ArraysNameToId);
+    errs() << "Statement converted\n";
+    osl_statement_print(stderr, OSLStmt);
     osl_statement_add(&OSLScop->statement, OSLStmt);
+    errs() << "Statement added\n";
   }
 
   FILE *File = std::fopen(FileName.c_str(), "w");
