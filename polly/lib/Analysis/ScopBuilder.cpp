@@ -840,10 +840,13 @@ void ScopBuilder::buildInvariantEquivalenceClasses() {
 
 bool ScopBuilder::buildDomains(
     Region *R, DenseMap<BasicBlock *, isl::set> &InvalidDomainMap) {
+  errs() << "=== ScopBuilder::buildDomains ===\n";
   bool IsOnlyNonAffineRegion = scop->isNonAffineSubRegion(R);
   auto *EntryBB = R->getEntry();
   auto *L = IsOnlyNonAffineRegion ? nullptr : LI.getLoopFor(EntryBB);
   int LD = scop->getRelativeLoopDepth(L);
+  errs() << "ScopBuilder::buildDomains: Loop depth of entry BB "
+         << EntryBB->getName() << " is " << LD << "\n";
   auto *S =
       isl_set_universe(isl_space_set_alloc(scop->getIslCtx().get(), 0, LD + 1));
 
@@ -851,14 +854,24 @@ bool ScopBuilder::buildDomains(
   isl::set Domain = isl::manage(S);
   scop->setDomain(EntryBB, Domain);
 
+  errs() << "ScopBuilder::buildDomains: Initial domain for entry BB "
+         << EntryBB->getName() << " is " << Domain << "\n";
+
   if (IsOnlyNonAffineRegion)
     return !containsErrorBlock(R->getNode(), *R, &SD);
 
-  if (!buildDomainsWithBranchConstraints(R, InvalidDomainMap))
+  if (!buildDomainsWithBranchConstraints(R, InvalidDomainMap)) {
+    errs() << "ca crash la \n";
     return false;
+  }
 
-  if (!propagateDomainConstraints(R, InvalidDomainMap))
+  errs() << "ScopBuilder::buildDomains: Domains after branch constraints "
+         << scop->getContext() << "\n";
+
+  if (!propagateDomainConstraints(R, InvalidDomainMap)) {
+    errs() << "ca crash lb \n";
     return false;
+  }
 
   // Error blocks and blocks dominated by them have been assumed to never be
   // executed. Representing them in the Scop does not add any value. In fact,
@@ -872,9 +885,12 @@ bool ScopBuilder::buildDomains(
   // with an empty set. Additionally, we will record for each block under which
   // parameter combination it would be reached via an error block in its
   // InvalidDomain. This information is needed during load hoisting.
-  if (!propagateInvalidStmtDomains(R, InvalidDomainMap))
+  if (!propagateInvalidStmtDomains(R, InvalidDomainMap)) {
+    errs() << "ca crash lb \n";
     return false;
+  }
 
+  errs() << "=== ScopBuilder::buildDomains === done tt va bien\n";
   return true;
 }
 
@@ -891,23 +907,30 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
   // As we are only interested in non-loop carried constraints here we can
   // simply skip loop back edges.
 
+  errs() << "\nScopBuilder::buildDomainsWithBranchConstraints " << "\n";
+  R->print(errs());
   SmallPtrSet<BasicBlock *, 8> FinishedExitBlocks;
   ReversePostOrderTraversal<Region *> RTraversal(R);
   for (auto *RN : RTraversal) {
-    // Recurse for affine subregions but go on for basic blocks and non-affine
-    // subregions.
+    errs() << "Visiting region node: " << RN->getEntry()->getName() << "\n";
+
+    // Recurse for affine subregions but go on for basic blocks and
+    // non-affine subregions.
     if (RN->isSubRegion()) {
+      errs() << "\tIs subregion\n";
       Region *SubRegion = RN->getNodeAs<Region>();
       if (!scop->isNonAffineSubRegion(SubRegion)) {
+        errs() << "\tPropagate into subregion\n";
         if (!buildDomainsWithBranchConstraints(SubRegion, InvalidDomainMap))
           return false;
         continue;
       }
     }
 
-    if (containsErrorBlock(RN, scop->getRegion(), &SD))
+    if (containsErrorBlock(RN, scop->getRegion(), &SD)) {
+      errs() << "\tContains error block, notify and continue\n";
       scop->notifyErrorBlock();
-    ;
+    }
 
     BasicBlock *BB = getRegionNodeBasicBlock(RN);
     Instruction *TI = BB->getTerminator();
@@ -919,7 +942,12 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
       continue;
     isl::set Domain = scop->getDomainConditions(BB);
 
+    errs() << "\tCurrent domain: " << Domain << "\n";
+
     scop->updateMaxLoopDepth(unsignedFromIslSize(Domain.tuple_dim()));
+
+    errs() << "updating max loop depth to "
+           << unsignedFromIslSize(Domain.tuple_dim()) << "\n";
 
     auto *BBLoop = getRegionNodeLoop(RN, LI);
     // Propagate the domain from BB directly to blocks that have a superset
@@ -949,6 +977,8 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
                                  ConditionSets))
       return false;
 
+    errs() << "\tCondition sets built:\n";
+
     // Now iterate over the successors and set their initial domain based on
     // their condition set. We skip back edges here and have to be careful when
     // we leave a loop not to keep constraints over a dimension that doesn't
@@ -956,20 +986,27 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
     assert(RN->isSubRegion() || TI->getNumSuccessors() == ConditionSets.size());
     for (unsigned u = 0, e = ConditionSets.size(); u < e; u++) {
       isl::set CondSet = isl::manage(ConditionSets[u]);
+      errs() << "\tCondition set " << CondSet << "\n";
       BasicBlock *SuccBB = getRegionNodeSuccessor(RN, TI, u);
 
       // Skip blocks outside the region.
-      if (!scop->contains(SuccBB))
+      if (!scop->contains(SuccBB)) {
+        errs() << "\tnot scop->contains(" << SuccBB->getName() << ")\n";
         continue;
+      }
 
       // If we propagate the domain of some block to "SuccBB" we do not have to
       // adjust the domain.
-      if (FinishedExitBlocks.count(SuccBB))
+      if (FinishedExitBlocks.count(SuccBB)) {
+        errs() << "\tFinished exit block " << SuccBB->getName() << "\n";
         continue;
+      }
 
       // Skip back edges.
-      if (DT.dominates(SuccBB, BB))
+      if (DT.dominates(SuccBB, BB)) {
+        errs() << "\tbackedge to " << SuccBB->getName() << "\n";
         continue;
+      }
 
       Loop *SuccBBLoop =
           getFirstNonBoxedLoopFor(SuccBB, LI, scop->getBoxedLoops());
@@ -985,11 +1022,15 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
         SuccDomain = SuccDomain.unite(CondSet).coalesce();
       } else {
         // Initialize the invalid domain.
+        errs() << "\tInvalid domain init for " << SuccBB->getName() << "\n";
         InvalidDomainMap[SuccBB] = CondSet.empty(CondSet.get_space());
         SuccDomain = CondSet;
       }
 
       SuccDomain = SuccDomain.detect_equalities();
+
+      errs() << "nb of basic sets in domain of " << SuccBB->getName() << ": "
+             << unsignedFromIslSize(SuccDomain.n_basic_set()) << "\n";
 
       // Check if the maximal number of domain disjunctions was reached.
       // In case this happens we will clean up and bail.
@@ -1002,7 +1043,7 @@ bool ScopBuilder::buildDomainsWithBranchConstraints(
       return false;
     }
   }
-
+  errs() << "ScopBuilder::buildDomainsWithBranchConstraints done\n";
   return true;
 }
 
@@ -1345,6 +1386,9 @@ void ScopBuilder::buildEscapingDependences(Instruction *Inst) {
 
 void ScopBuilder::addRecordedAssumptions() {
   for (auto &AS : llvm::reverse(RecordedAssumptions)) {
+    errs() << "Invalid Context " << scop->getInvalidContext() << "\n";
+    errs() << "Adding recorded assumption: " << AS.Set << " kind = " << AS.Kind
+           << " sign = " << AS.Sign << "\n";
 
     if (!AS.BB) {
       scop->addAssumption(AS.Kind, AS.Set, AS.Loc, AS.Sign,
@@ -1380,6 +1424,7 @@ void ScopBuilder::addRecordedAssumptions() {
 void ScopBuilder::addUserAssumptions(
     AssumptionCache &AC, DenseMap<BasicBlock *, isl::set> &InvalidDomainMap) {
   for (auto &Assumption : AC.assumptions()) {
+    errs() << "Processing user assumption: " << *Assumption << "\n";
     auto *CI = dyn_cast_or_null<CallInst>(Assumption);
     if (!CI || CI->arg_size() != 1)
       continue;
@@ -1448,8 +1493,12 @@ void ScopBuilder::addUserAssumptions(
     ORE.emit(OptimizationRemarkAnalysis(DEBUG_TYPE, "UserAssumption", CI)
              << "Use user assumption: "
              << stringFromIslObj(AssumptionCtx, "null"));
+    errs() << "User assumption context: "
+           << stringFromIslObj(AssumptionCtx, "null") << "\n";
+    errs() << "Context " << scop->getContext() << "\n";
     isl::set newContext =
         scop->getContext().intersect(isl::manage(AssumptionCtx));
+    errs() << "New context " << newContext << "\n";
     scop->setContext(newContext);
   }
 }
@@ -2407,6 +2456,8 @@ void ScopBuilder::assumeNoOutOfBounds() {
   for (auto &Stmt : *scop)
     for (auto &Access : Stmt) {
       isl::set Outside = Access->assumeNoOutOfBound();
+      errs() << "outside " << Outside << "\n";
+
       const auto &Loc = Access->getAccessInstruction()
                             ? Access->getAccessInstruction()->getDebugLoc()
                             : DebugLoc();
@@ -3686,9 +3737,12 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
     return;
   }
 
+  scop->hasFeasibleRuntimeContext();
   LLVM_DEBUG(errs() << "scop after buildDomains : " << *scop << "\n");
+  errs() << "context " << scop->getContext() << "\n";
 
   addUserAssumptions(AC, InvalidDomainMap);
+  errs() << "context " << scop->getContext() << "\n";
 
   LLVM_DEBUG(errs() << "scop after addUserAssumptions : " << *scop << "\n");
 
@@ -3700,11 +3754,12 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       Stmt.setInvalidDomain(InvalidDomainMap[getRegionNodeBasicBlock(
           Stmt.getRegion()->getNode())]);
 
-  LLVM_DEBUG(errs() << "scop before removeEmpty : " << *scop << "\n");
+  LLVM_DEBUG(errs() << "scop after setInvalidDomain : " << *scop << "\n");
   // Remove empty statements.
   // Exit early in case there are no executable statements left in this scop.
   scop->removeStmtNotInDomainMap();
-  LLVM_DEBUG(errs() << "scop between removeEmpty : " << *scop << "\n");
+  LLVM_DEBUG(errs() << "scop after removeStmtNotInDomainMap : " << *scop
+                    << "\n");
   scop->simplifySCoP(false);
   if (scop->isEmpty()) {
     POLLY_DEBUG(dbgs() << "Bailing-out because SCoP is empty\n");
@@ -3712,6 +3767,8 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   }
 
   LLVM_DEBUG(errs() << "scop after simplify : " << *scop << "\n");
+
+  scop->hasFeasibleRuntimeContext();
 
   // The ScopStmts now have enough information to initialize themselves.
   for (ScopStmt &Stmt : *scop) {
@@ -3751,12 +3808,19 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
   LLVM_DEBUG(errs() << "scop after finalizeAccesses : " << *scop << "\n");
 
   scop->realignParams();
+  LLVM_DEBUG(errs() << "scop after realignParams : " << *scop << "\n");
   addUserContext();
+  LLVM_DEBUG(errs() << "scop after addUserContext : " << *scop << "\n");
+  errs() << "Invalid Context after addUserContext " << scop->getInvalidContext()
+         << "\n";
 
   // After the context was fully constructed, thus all our knowledge about
   // the parameters is in there, we add all recorded assumptions to the
   // assumed/invalid context.
   addRecordedAssumptions();
+  errs() << "Invalid Context after addRecordedAssumptions "
+         << scop->getInvalidContext() << "\n";
+  LLVM_DEBUG(errs() << "scop after addRecordedAssumptions: " << *scop << "\n");
 
   scop->simplifyContexts();
   LLVM_DEBUG(errs() << "scop after simplifyContexts : " << *scop << "\n");

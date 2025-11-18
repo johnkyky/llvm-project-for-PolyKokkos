@@ -1891,8 +1891,25 @@ bool Scop::hasFeasibleRuntimeContext() const {
 
   isl::set PositiveContext = getAssumedContext();
   isl::set NegativeContext = getInvalidContext();
+  errs() << "Assumed Context: " << stringFromIslObj(PositiveContext) << "\n";
+  errs() << "Invalid Context: " << stringFromIslObj(NegativeContext) << "\n";
+  errs() << "Scop Context: " << stringFromIslObj(getContext()) << "\n";
+  errs() << "Domains Context: " << stringFromIslObj(getDomains().params())
+         << "\n";
+
   PositiveContext = PositiveContext.intersect_params(Context);
+  errs() << "\nPositive Context after intersecting with Scop Context: "
+         << stringFromIslObj(PositiveContext) << "\n";
   PositiveContext = PositiveContext.intersect_params(getDomains().params());
+  errs() << "Positive Context after intersecting with Scop and Domains: "
+         << stringFromIslObj(PositiveContext) << "\n";
+
+  if (not PositiveContext.is_empty().is_false())
+    errs() << "\nPositive context is empty!\n";
+  else if (not PositiveContext.is_subset(NegativeContext).is_false())
+    errs() << "\nPositive.is_subset "
+           << PositiveContext.is_subset(NegativeContext).is_false() << "\n";
+
   return PositiveContext.is_empty().is_false() &&
          PositiveContext.is_subset(NegativeContext).is_false();
 }
