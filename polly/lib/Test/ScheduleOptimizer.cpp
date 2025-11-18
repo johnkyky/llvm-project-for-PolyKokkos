@@ -25,6 +25,11 @@ using namespace polly;
 
 #define DEBUG_TYPE "polly-pluto"
 
+static cl::opt<std::string> PlutoPath("polly-pluto-path",
+                                      cl::desc("Pluto path"), cl::Hidden,
+                                      cl::ValueRequired, cl::init("pluto"),
+                                      cl::cat(PollyCategory));
+
 static cl::opt<std::string> PlutoArguments(
     "polly-pluto-args", cl::desc("Arguments to be passed to pluto optimizer"),
     cl::Hidden, cl::ValueRequired,
@@ -89,8 +94,8 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
   std::system(CopyCommand.c_str());
 
   std::string RunPlutoCommand =
-      "docker exec pluto_container sh -c \"cat /home/" + FileNameInput +
-      " | pluto " + PlutoArguments +
+      "docker exec pluto_container sh -c \"cat /home/" + FileNameInput + " | " +
+      PlutoPath + " " + PlutoArguments +
       " --readscop "
       "stdin -o "
       "stdout\"";
