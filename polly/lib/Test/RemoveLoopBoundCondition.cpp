@@ -26,6 +26,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
+#define DEBUG_TYPE "polly-remove-loop-bound-condition"
+
 using namespace llvm;
 using namespace polly;
 
@@ -123,14 +125,20 @@ void removeLoopBoundConditions(Function &F,
 
         auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
 
+        IRBuilder<> Builder(Branch);
+        Value *Assume = Builder.CreateAssumption(ICmp);
+        LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
+
         BranchInst::Create(NextBB, Branch);
+        LLVM_DEBUG(errs() << "Removing loop bound condition " << *ICmp << "\n");
         Branch->eraseFromParent();
       } else if (auto *Select = dyn_cast<SelectInst>(Cond)) {
         unsigned IndexOp = 0;
-        if (auto *ICmp = dyn_cast<ICmpInst>(Select->getCondition())) {
-          Value *LHS = ICmp->getOperand(0);
-          Value *RHS = ICmp->getOperand(1);
-          ICmpInst::Predicate Pred = ICmp->getPredicate();
+        ICmpInst *ICmp1 = nullptr;
+        if ((ICmp1 = dyn_cast<ICmpInst>(Select->getCondition()))) {
+          Value *LHS = ICmp1->getOperand(0);
+          Value *RHS = ICmp1->getOperand(1);
+          ICmpInst::Predicate Pred = ICmp1->getPredicate();
 
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
@@ -142,10 +150,10 @@ void removeLoopBoundConditions(Function &F,
         }
         if (IndexOp == 0)
           continue;
-        if (auto *ICmp = dyn_cast<ICmpInst>(Select->getOperand(IndexOp))) {
-          Value *LHS = ICmp->getOperand(0);
-          Value *RHS = ICmp->getOperand(1);
-          ICmpInst::Predicate Pred = ICmp->getPredicate();
+        if (auto *ICmp2 = dyn_cast<ICmpInst>(Select->getOperand(IndexOp))) {
+          Value *LHS = ICmp2->getOperand(0);
+          Value *RHS = ICmp2->getOperand(1);
+          ICmpInst::Predicate Pred = ICmp2->getPredicate();
 
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
@@ -154,7 +162,16 @@ void removeLoopBoundConditions(Function &F,
             continue;
 
           auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
+
+          IRBuilder<> Builder(Branch);
+          Value *Assume1 = Builder.CreateAssumption(ICmp1);
+          Value *Assume2 = Builder.CreateAssumption(ICmp2);
+          LLVM_DEBUG(errs() << "Registering assumption: " << *Assume1 << "\n");
+          LLVM_DEBUG(errs() << "Registering assumption: " << *Assume2 << "\n");
+
           BranchInst::Create(NextBB, Branch);
+          LLVM_DEBUG(errs() << "Removing loop bound condition " << *ICmp1
+                            << "   " << *ICmp2 << "\n");
           Branch->eraseFromParent();
         }
       } else if (isa<FCmpInst>(Cond)) {
@@ -177,17 +194,18 @@ RemoveLoopBoundConditionPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
 
-  errs() << "RemoveLoopBoundConditionPass pass run on " << F.getName() << "\n";
+  LLVM_DEBUG(errs() << "RemoveLoopBoundConditionPass pass run on "
+                    << F.getName() << "\n";);
 
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
-  errs() << LBA << "\n";
+  LLVM_DEBUG(errs() << LBA << "\n";);
   removeLoopBoundConditions(F, LBA);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
   }
 
-  errs() << "RemoveLoopBoundConditionPass pass done\n";
+  LLVM_DEBUG(errs() << "RemoveLoopBoundConditionPass pass done\n";);
 
   return PreservedAnalyses::none();
 }
