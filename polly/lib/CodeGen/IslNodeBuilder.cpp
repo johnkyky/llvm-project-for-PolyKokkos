@@ -1403,6 +1403,8 @@ Value *IslNodeBuilder::createRTC(isl_ast_expr *Condition) {
   // and consequently will result in linker errors.
   if (ExprBuilder.hasLargeInts(isl::manage_copy(Condition))) {
     isl_ast_expr_free(Condition);
+    errs() << "Polly RTC: Condition uses integers larger than 64 bit. "
+           << "Bailing out to original code.\n";
     return Builder.getFalse();
   }
 
