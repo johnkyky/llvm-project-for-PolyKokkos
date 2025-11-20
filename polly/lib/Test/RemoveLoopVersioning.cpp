@@ -17,6 +17,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
@@ -25,6 +26,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "polly-remove-loop-versioning"
 
 using namespace llvm;
 using namespace polly;
@@ -140,22 +143,19 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
             }
           }
 
+          IRBuilder<> Builder(Branch);
+          ICmp->setPredicate(
+              CmpInst::getInversePredicate(ICmp->getPredicate()));
+          Value *Assume = Builder.CreateAssumption(ICmp);
+          LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
+
           BranchInst *NewBranch = BranchInst::Create(NextBB);
           Branch->eraseFromParent();
           NewBranch->insertInto(ParentBlock, ParentBlock->end());
           break;
         }
-        case ICmpInst::ICMP_NE: {
-          // errs() << "on sup Branch " << *Branch << "\n";
-          // errs() << "on branch to " << *Branch->getSuccessor(0) << "\n";
-          BasicBlock *NextBB = Branch->getSuccessor(0);
-          BranchInst *NewBranch = BranchInst::Create(NextBB);
-          Branch->eraseFromParent();
-          NewBranch->insertInto(ICmp->getParent(), ICmp->getParent()->end());
-          break;
-        }
         default: {
-          errs() << "Unsupported predicate, skipping\n";
+          LLVM_DEBUG(errs() << "Unsupported predicate, skipping\n";);
           break;
         }
         }
@@ -171,7 +171,8 @@ PreservedAnalyses RemoveLoopVersioningPass::run(Function &F,
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
 
-  errs() << "RemoveUnswitchedBranchesPass pass run on " << F.getName() << "\n";
+  LLVM_DEBUG(errs() << "RemoveUnswitchedBranchesPass pass run on "
+                    << F.getName() << "\n";);
 
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
   removeUnswitchedBranches(F, LI);
@@ -180,7 +181,7 @@ PreservedAnalyses RemoveLoopVersioningPass::run(Function &F,
     report_fatal_error("IR verification failed.");
   }
 
-  errs() << "RemoveUnswitchedBranchesPass pass done\n";
+  LLVM_DEBUG(errs() << "RemoveUnswitchedBranchesPass pass done\n";);
 
   return PreservedAnalyses::none();
 }
