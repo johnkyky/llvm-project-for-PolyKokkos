@@ -171,8 +171,8 @@ PreservedAnalyses RemoveLoopVersioningPass::run(Function &F,
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
 
-  LLVM_DEBUG(errs() << "RemoveUnswitchedBranchesPass pass run on "
-                    << F.getName() << "\n";);
+  LLVM_DEBUG(errs() << "RemoveLoopVersioningPass pass run on " << F.getName()
+                    << "\n";);
 
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
   removeUnswitchedBranches(F, LI);
@@ -181,7 +181,7 @@ PreservedAnalyses RemoveLoopVersioningPass::run(Function &F,
     report_fatal_error("IR verification failed.");
   }
 
-  LLVM_DEBUG(errs() << "RemoveUnswitchedBranchesPass pass done\n";);
+  LLVM_DEBUG(errs() << "RemoveLoopVersioningPass pass done\n";);
 
   return PreservedAnalyses::none();
 }
