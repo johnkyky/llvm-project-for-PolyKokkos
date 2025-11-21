@@ -102,6 +102,7 @@ add_llvm_pass_plugin(Polly
   Test/ArrayFusion.cpp
   Test/RemoveLoopVersioning.cpp
   Test/RemoveLoopBoundCondition.cpp
+  Test/ArrayReg2Mem.cpp
 
   ${POLLY_HEADER_FILES}
 
