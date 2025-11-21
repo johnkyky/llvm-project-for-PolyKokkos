@@ -85,6 +85,11 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
   for (BasicBlock &BB : F) {
     // errs() << "\n\nVisiting block: " << BB.getName() << "\n";
 
+    if (LI.getLoopFor(&BB)) {
+      // errs() << "Skipping block inside a loop\n";
+      continue;
+    }
+
     // check if block have itself in its successors (loop backedge)
     if (std::find(succ_begin(&BB), succ_end(&BB), &BB) != succ_end(&BB)) {
       // errs() << "Skipping block with self-loop\n";
