@@ -40,6 +40,7 @@
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
 #include "polly/Test/ArrayFusion.h"
+#include "polly/Test/ArrayReg2Mem.h"
 #include "polly/Test/CheckParallelism.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/FunctionMarkedInliner.h"
@@ -332,7 +333,8 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(ArrayFusion());
   PM.addPass(SimplifyCFGPass());
   PM.addPass(llvm::DCEPass());
-  // PM.addPass(FunctionPassTest());
+  // PM.addPass(ArrayReg2MemPass());
+  PM.addPass(FunctionPassTest());
 
   PassBuilder PB;
   ScopPassManager SPM;
