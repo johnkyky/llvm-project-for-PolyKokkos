@@ -12,6 +12,7 @@
 #include "polly/Test/ArrayFusion.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "polly-array-fusion"
 
@@ -26,11 +27,9 @@ bool sameArraysFusion(Function &F, ExtractAnnotatedSizes::Result &Anno,
   for (auto &[InstArray, Data] : Anno) {
     auto *MDStr = MDString::get(InstArray->getContext(), Data.Name);
     MDNode *MD = MDNode::get(InstArray->getContext(), {MDStr});
-    InstArray->setMetadata("name", MD);
+    InstArray->setMetadata("array", MD);
     Res = true;
   }
-
-  /////////
 
   using NameToInstructionsT =
       llvm::DenseMap<llvm::StringRef, std::vector<Instruction *>>;
@@ -71,11 +70,16 @@ bool sameArraysFusion(Function &F, ExtractAnnotatedSizes::Result &Anno,
     auto &FirstArrayData = Anno.Map[FirstArray];
 
     for (size_t I = 1; I < Arrays.size(); ++I) {
+      LLVM_DEBUG(errs() << "Replacing all uses of array: " << *Arrays[I]
+                        << " with " << *FirstArray << "\n";);
       Arrays[I]->replaceAllUsesWith(FirstArray);
 
       auto &FirstArrayDataSizes = FirstArrayData.Sizes;
       auto &OtherArraySizes = Anno.Map.at(Arrays[I]).Sizes;
       for (size_t I = 0; I < FirstArrayDataSizes.size(); ++I) {
+        LLVM_DEBUG(errs() << "Replacing all uses of size: "
+                          << *OtherArraySizes[I] << " with "
+                          << *FirstArrayDataSizes[I] << "\n";);
         OtherArraySizes[I]->replaceAllUsesWith(FirstArrayDataSizes[I]);
       }
     }
