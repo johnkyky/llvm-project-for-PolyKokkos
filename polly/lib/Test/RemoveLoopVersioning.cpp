@@ -148,7 +148,7 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
               CmpInst::getInversePredicate(ICmp->getPredicate()));
           Value *Assume = Builder.CreateAssumption(ICmp);
           LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
-
+          LLVM_DEBUG(errs() << "Removing branch to " << *Branch << "\n";);
           BranchInst *NewBranch = BranchInst::Create(NextBB);
           Branch->eraseFromParent();
           NewBranch->insertInto(ParentBlock, ParentBlock->end());
