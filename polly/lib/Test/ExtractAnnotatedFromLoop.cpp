@@ -252,6 +252,8 @@ bool moveInnerLoopLoad(Function &F) {
     auto *HoistedLoad = Builder.CreateLoad(LoadArray->getType(), GEP);
     HoistedLoad->setName(LoadArray->getName() + Name);
 
+    LLVM_DEBUG(errs() << "Hoisting load " << *LoadArray << " to "
+                      << *HoistedLoad << "\n";);
     LoadArray->replaceAllUsesWith(HoistedLoad);
     LoadArray->eraseFromParent();
     return true;
@@ -288,6 +290,9 @@ bool moveInnerLoopLoad(Function &F) {
         IRBuilder<> Builder(GEP->getNextNode());
         auto *HoistedLoad = Builder.CreateLoad(LoadInst->getType(), GEP);
         HoistedLoad->setName(LoadInst->getName() + "hoistedParam");
+
+        LLVM_DEBUG(errs() << "Hoisting load " << *LoadInst << " to "
+                          << *HoistedLoad << "\n";);
         LoadInst->replaceAllUsesWith(HoistedLoad);
         LoadInst->eraseFromParent();
       }
