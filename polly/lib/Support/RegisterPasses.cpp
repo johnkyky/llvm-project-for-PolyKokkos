@@ -52,6 +52,7 @@
 #include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/Test/ScheduleOptimizer.h"
+#include "polly/Test/TriangularLoopFix.h"
 #include "polly/Test/UserAssumptions.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/PassManager.h"
@@ -59,8 +60,11 @@
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
 
 namespace cl = llvm::cl;
 
@@ -322,19 +326,31 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
   PM.addPass(CodePreparationPass());
-  PM.addPass(RemoveLoopVersioningPass());
-  PM.addPass(SimplifyCFGPass());
   PM.addPass(ExtractAnnotatedFromLoop());
-  PM.addPass(RemoveLoopBoundConditionPass());
-  PM.addPass(llvm::DCEPass());
-  PM.addPass(SimplifyCFGPass());
-  PM.addPass(LoopFusionPass());
   PM.addPass(UserAssumptions());
-  PM.addPass(ArrayFusion());
   PM.addPass(SimplifyCFGPass());
-  PM.addPass(llvm::DCEPass());
+
+  PM.addPass(RemoveLoopVersioningPass());
+  PM.addPass(InstCombinePass());
+  PM.addPass(SimplifyCFGPass());
+
+  PM.addPass(RemoveLoopBoundConditionPass());
+  PM.addPass(InstCombinePass());
+  PM.addPass(SimplifyCFGPass());
+
+  PM.addPass(LoopFusionPass());
+  PM.addPass(InstCombinePass());
+  PM.addPass(SimplifyCFGPass());
+
+  // PM.addPass(LoopSimplifyPass());
+  PM.addPass(TriangularLoopFixPass());
+  PM.addPass(InstCombinePass());
+  PM.addPass(SimplifyCFGPass());
+
+  // PM.addPass(ArrayFusion());
+  // PM.addPass(InstCombinePass());
   // PM.addPass(ArrayReg2MemPass());
-  PM.addPass(FunctionPassTest());
+  // PM.addPass(ADCEPass());
 
   PassBuilder PB;
   ScopPassManager SPM;
