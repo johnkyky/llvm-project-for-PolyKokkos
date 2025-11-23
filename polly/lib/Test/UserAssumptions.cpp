@@ -347,6 +347,7 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
 
   if (LHS.IsLiteral) {
     std::swap(C.LHS, C.RHS);
+    C.Op = getReverseOperator(C.Op);
     applyPolicyVsLiteral(C, F, Builder, Assumptions);
     return;
   }
@@ -355,8 +356,10 @@ void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
     return;
   }
 
-  if (LHS.PolicyIndex > RHS.PolicyIndex)
+  if (LHS.PolicyIndex > RHS.PolicyIndex) {
     std::swap(LHS, RHS);
+    C.Op = getReverseOperator(C.Op);
+  }
 
   auto *LHSInst = LHS.InstBound;
   auto *RHSInst = RHS.InstBound;
