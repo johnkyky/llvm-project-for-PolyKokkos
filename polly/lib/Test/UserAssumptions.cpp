@@ -33,7 +33,6 @@ struct PolicyBound {
   size_t BoundIndex;
 
   // IR
-  // Loop *L = nullptr;
   Instruction *InstBound = nullptr;
 
   // If assumption set policy bound to a literal value
@@ -65,6 +64,25 @@ struct Comparison {
   Operator Op;
   Operand RHS;
 };
+
+Comparison::Operator getReverseOperator(Comparison::Operator Op) {
+  switch (Op) {
+  case Comparison::Operator::EQUAL:
+    return Comparison::Operator::EQUAL;
+  case Comparison::Operator::NOT_EQUAL:
+    return Comparison::Operator::NOT_EQUAL;
+  case Comparison::Operator::LESS:
+    return Comparison::Operator::GREATER;
+  case Comparison::Operator::GREATER:
+    return Comparison::Operator::LESS;
+  case Comparison::Operator::LESS_EQUAL:
+    return Comparison::Operator::GREATER_EQUAL;
+  case Comparison::Operator::GREATER_EQUAL:
+    return Comparison::Operator::LESS_EQUAL;
+  case Comparison::Operator::UNKNOWN:
+    return Comparison::Operator::UNKNOWN;
+  }
+}
 
 std::string operandToString(const Operand &Operand) {
   return std::visit(
@@ -310,26 +328,6 @@ parseAssumptions(StringRef AssumptionsStr,
   }
 
   return ComparaisonVec;
-
-  // for (auto &BB : F) {
-  //   for (auto &I : BB) {
-  //     auto [CallInst, StrRef] = isAnnotationInstruction(&I, "var");
-  //     if (CallInst) {
-  //       Value *Op = CallInst->getOperand(0);
-  //       errs() << "New var : " << *Op << " " << StrRef << "\n";
-  //       auto *IndOP = dyn_cast<PHINode>(Op);
-  //
-  //       auto *Inst = dyn_cast<Instruction>(Op);
-  //       if (not Inst)
-  //         continue;
-  //
-  //       errs() << "getLoopUpperBound "
-  //              << *getLoopUpperBound(Inst,
-  //              LI.getLoopFor(Inst->getParent()), SE)
-  //              << "\n";
-  //     }
-  //   }
-  // }
 }
 
 void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
@@ -471,6 +469,7 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
         if (OtherLHS == LHS) {
           OtherC.LHS = RHS;
           std::swap(OtherC.LHS, OtherC.RHS);
+          OtherC.Op = getReverseOperator(OtherC.Op);
           Updated = true;
         }
       }
@@ -510,7 +509,8 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
     Value *Assumption = Builder.CreateAssumption(Cmp);
 
-    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+    LLVM_DEBUG(errs() << "Registering assumption " << *Cmp << " -> "
+                      << *Assumption << "\n");
     break;
   }
   default:
