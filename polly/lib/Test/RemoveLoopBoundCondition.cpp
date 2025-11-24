@@ -33,18 +33,48 @@ using namespace polly;
 
 namespace {
 
-BasicBlock *getTrueCondition(BranchInst *Branch, const Instruction *LeftOp,
+BasicBlock *getTrueCondition(BranchInst *Branch, const Value *LeftOpVal,
                              ICmpInst::Predicate Predica,
-                             const Instruction *RightOp) {
+                             const Value *RightOpVal, const ICmpInst *ICmp) {
   switch (Predica) {
   case ICmpInst::ICMP_ULT: {
-    const auto *LeftMD = LeftOp->getMetadata("loop_bound_information");
-    MDString *LeftMDStr = dyn_cast<MDString>(LeftMD->getOperand(1));
-    const auto LeftBoundKind = LeftMDStr->getString();
+    bool LeftIsConst = isa<ConstantInt>(LeftOpVal);
+    bool RightIsConst = isa<ConstantInt>(RightOpVal);
 
-    const auto *RightMD = RightOp->getMetadata("loop_bound_information");
-    MDString *RightMDStr = dyn_cast<MDString>(RightMD->getOperand(1));
-    const auto RightBoundKind = RightMDStr->getString();
+    StringRef LeftBoundKind;
+    StringRef RightBoundKind;
+    if (not LeftIsConst and not RightIsConst) {
+      const Instruction *LeftOp = dyn_cast<Instruction>(LeftOpVal);
+      const auto *LeftMD = LeftOp->getMetadata("loop_bound_information");
+      MDString *LeftMDStr = dyn_cast<MDString>(LeftMD->getOperand(1));
+      LeftBoundKind = LeftMDStr->getString();
+
+      const Instruction *RightOp = dyn_cast<Instruction>(RightOpVal);
+      const auto *RightMD = RightOp->getMetadata("loop_bound_information");
+      MDString *RightMDStr = dyn_cast<MDString>(RightMD->getOperand(1));
+      RightBoundKind = RightMDStr->getString();
+    } else {
+      if (not ICmp->hasMetadata("old_loop_bound")) {
+        report_fatal_error(
+            "Loop bound condition missing old_loop_bound metadata");
+      }
+      auto *OldMD = ICmp->getMetadata("old_loop_bound");
+      MDString *OldMDStr = dyn_cast<MDString>(OldMD->getOperand(1));
+      StringRef OldBoundKind = OldMDStr->getString();
+      if (LeftIsConst) {
+        LeftBoundKind = OldBoundKind;
+        const Instruction *RightOp = dyn_cast<Instruction>(RightOpVal);
+        const auto *RightMD = RightOp->getMetadata("loop_bound_information");
+        MDString *RightMDStr = dyn_cast<MDString>(RightMD->getOperand(1));
+        RightBoundKind = RightMDStr->getString();
+      } else {
+        RightBoundKind = OldBoundKind;
+        const Instruction *LeftOp = dyn_cast<Instruction>(LeftOpVal);
+        const auto *LeftMD = LeftOp->getMetadata("loop_bound_information");
+        MDString *LeftMDStr = dyn_cast<MDString>(LeftMD->getOperand(1));
+        LeftBoundKind = LeftMDStr->getString();
+      }
+    }
 
     if (LeftBoundKind == "lower" && RightBoundKind == "upper") {
       return Branch->getSuccessor(0);
@@ -55,6 +85,7 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Instruction *LeftOp,
     break;
   }
   default:
+    llvm_unreachable("Unsupported loop bound condition");
     break;
   }
   report_fatal_error("Invalid loop bound condition");
@@ -91,13 +122,18 @@ void removeLoopBoundConditions(Function &F,
                                const SmallVector<LoopBoundT, 4> LoopBounds) {
 
   auto CheckInstIsLoopBounds = [&](const Instruction *LHSInst,
-                                   const Instruction *RHSInst) {
+                                   const Instruction *RHSInst,
+                                   const ICmpInst *ICmp) {
     const auto *ItLeft =
         std::find_if(LoopBounds.begin(), LoopBounds.end(),
                      [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
     const auto *ItRight =
         std::find_if(LoopBounds.begin(), LoopBounds.end(),
                      [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
+
+    if ((ItLeft == LoopBounds.end()) xor (ItRight == LoopBounds.end())) {
+      return ICmp->hasMetadata("old_loop_bound");
+    }
 
     if (not(ItLeft != LoopBounds.end() and ItRight != LoopBounds.end()))
       return false;
@@ -120,10 +156,10 @@ void removeLoopBoundConditions(Function &F,
         const auto *LHSInst = dyn_cast<Instruction>(LHS);
         const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-        if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
+        if (not CheckInstIsLoopBounds(LHSInst, RHSInst, ICmp))
           continue;
 
-        auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
+        auto *NextBB = getTrueCondition(Branch, LHS, Pred, RHS, ICmp);
 
         IRBuilder<> Builder(Branch);
         Value *Assume = Builder.CreateAssumption(ICmp);
@@ -143,7 +179,7 @@ void removeLoopBoundConditions(Function &F,
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-          if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
+          if (not CheckInstIsLoopBounds(LHSInst, RHSInst, ICmp1))
             continue;
 
           IndexOp = getValidCondition(LHSInst, Pred, RHSInst);
@@ -158,10 +194,11 @@ void removeLoopBoundConditions(Function &F,
           const auto *LHSInst = dyn_cast<Instruction>(LHS);
           const auto *RHSInst = dyn_cast<Instruction>(RHS);
 
-          if (not CheckInstIsLoopBounds(LHSInst, RHSInst))
+          if (not CheckInstIsLoopBounds(LHSInst, RHSInst, ICmp2))
             continue;
 
-          auto *NextBB = getTrueCondition(Branch, LHSInst, Pred, RHSInst);
+          auto *NextBB =
+              getTrueCondition(Branch, LHSInst, Pred, RHSInst, ICmp2);
 
           IRBuilder<> Builder(Branch);
           Value *Assume1 = Builder.CreateAssumption(ICmp1);
