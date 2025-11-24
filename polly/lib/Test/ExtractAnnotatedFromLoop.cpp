@@ -232,6 +232,54 @@ bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
   return Res;
 }
 
+unsigned getLoopNestMaxDepth(Loop *L) {
+  unsigned MaxDepth = L->getLoopDepth();
+  for (Loop *SubLoop : L->getSubLoops()) {
+    MaxDepth = std::max(MaxDepth, getLoopNestMaxDepth(SubLoop));
+  }
+  return MaxDepth;
+}
+
+SmallVector<Loop *, 2>
+filterRedundantVersions(const SmallVector<Loop *, 2> &InputLoops) {
+  std::map<BasicBlock *, std::vector<Loop *>> LoopGroups;
+  SmallVector<Loop *, 2> FinalLoops;
+
+  for (Loop *L : InputLoops) {
+    BasicBlock *Header = L->getHeader();
+    BasicBlock *IncomingBlock = nullptr;
+
+    for (BasicBlock *Pred : predecessors(Header)) {
+      if (!L->contains(Pred)) {
+        IncomingBlock = Pred;
+        break;
+      }
+    }
+
+    if (IncomingBlock) {
+      LoopGroups[IncomingBlock].push_back(L);
+    } else {
+      FinalLoops.push_back(L);
+    }
+  }
+
+  for (auto &Entry : LoopGroups) {
+    std::vector<Loop *> &Group = Entry.second;
+
+    if (Group.size() > 1) {
+      std::sort(Group.begin(), Group.end(), [](Loop *A, Loop *B) {
+        return getLoopNestMaxDepth(A) > getLoopNestMaxDepth(B);
+      });
+
+      FinalLoops.push_back(Group[0]);
+
+    } else {
+      FinalLoops.push_back(Group[0]);
+    }
+  }
+  return FinalLoops;
+}
+
 bool moveInnerLoopLoad(Function &F) {
   bool Res = false;
 
@@ -462,6 +510,9 @@ SmallVector<Loop *, 2> polly::findLoop(Function &F, LoopInfo &LI,
 
   auto LoopsVec =
       SmallVector<Loop *, 2>(LoopsBetween.begin(), LoopsBetween.end());
+
+  LoopsVec = filterRedundantVersions(LoopsVec);
+
   std::sort(LoopsVec.begin(), LoopsVec.end(), [&](Loop *A, Loop *B) {
     return DT.dominates(A->getHeader(), B->getHeader());
   });
@@ -480,8 +531,7 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   errs() << FM.getResult<ExtractAnnotatedSizes>(F) << "\n";
 
   readBackend(F);
-  extractLoopBoundAnnotation(F, FM.getResult<LoopAnalysis>(F),
-                             FM.getResult<DominatorTreeAnalysis>(F));
+  extractLoopBoundAnnotation(F, LI, DT);
   moveInnerLoopLoad(F);
   if (F.hasFnAttribute("polly.backend")) {
     llvm::Attribute Attr = F.getFnAttribute("polly.backend");
