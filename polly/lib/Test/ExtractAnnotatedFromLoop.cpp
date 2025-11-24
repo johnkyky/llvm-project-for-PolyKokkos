@@ -528,6 +528,9 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass run on " << F.getName()
                     << "\n");
 
+  LoopInfo &LI = FM.getResult<LoopAnalysis>(F);
+  auto &DT = FM.getResult<DominatorTreeAnalysis>(F);
+
   errs() << FM.getResult<ExtractAnnotatedSizes>(F) << "\n";
 
   readBackend(F);
