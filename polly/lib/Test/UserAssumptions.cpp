@@ -12,6 +12,8 @@
 #include "polly/Test/UserAssumptions.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/LoopFusion.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
@@ -453,7 +455,20 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
   case Comparison::Operator::EQUAL: {
     LLVM_DEBUG(errs() << "Replacing " << *BoundInst << " with constant "
                       << *ConstVal << "\n");
+
+    for (auto *User : BoundInst->users()) {
+      if (auto *ICmp = dyn_cast<ICmpInst>(User)) {
+        Module *M = BoundInst->getModule();
+        unsigned SourceKindID = M->getMDKindID("loop_bound_information");
+        unsigned DestKindID = M->getMDKindID("old_loop_bound");
+
+        if (MDNode *Node = BoundInst->getMetadata(SourceKindID))
+          ICmp->setMetadata(DestKindID, Node);
+      }
+    }
+
     BoundInst->replaceAllUsesWith(ConstVal);
+
     LHS.IsLiteral = true;
     LHS.LiteralValue = RHS;
 
