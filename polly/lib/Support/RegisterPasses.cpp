@@ -54,6 +54,7 @@
 #include "polly/Test/ScheduleOptimizer.h"
 #include "polly/Test/TriangularLoopFix.h"
 #include "polly/Test/UserAssumptions.h"
+#include "polly/Test/VarFusion.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -331,10 +332,13 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(SimplifyCFGPass());
 
   PM.addPass(RemoveLoopVersioningPass());
-  PM.addPass(InstCombinePass());
   PM.addPass(SimplifyCFGPass());
 
   PM.addPass(RemoveLoopBoundConditionPass());
+  PM.addPass(InstCombinePass());
+  PM.addPass(SimplifyCFGPass());
+
+  PM.addPass(VarFusionPass());
   PM.addPass(InstCombinePass());
   PM.addPass(SimplifyCFGPass());
 
@@ -342,15 +346,14 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(InstCombinePass());
   PM.addPass(SimplifyCFGPass());
 
-  // PM.addPass(LoopSimplifyPass());
   PM.addPass(TriangularLoopFixPass());
   PM.addPass(InstCombinePass());
   PM.addPass(SimplifyCFGPass());
 
-  // PM.addPass(ArrayFusion());
-  // PM.addPass(InstCombinePass());
+  PM.addPass(ArrayFusion());
+  PM.addPass(InstCombinePass());
   // PM.addPass(ArrayReg2MemPass());
-  // PM.addPass(ADCEPass());
+  PM.addPass(ADCEPass());
 
   PassBuilder PB;
   ScopPassManager SPM;
