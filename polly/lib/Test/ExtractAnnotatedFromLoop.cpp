@@ -21,6 +21,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
@@ -350,6 +351,26 @@ bool moveInnerLoopLoad(Function &F) {
   return Res;
 }
 
+void extractVarAnnotations(Function &F) {
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      auto [CallInst, StrRef] = isAnnotationInstruction(&I, "var ");
+      if (not CallInst)
+        continue;
+
+      Value *Op = CallInst->getOperand(0);
+      errs() << "Variable annotation: " << *Op << " -> " << StrRef << "\n";
+      if (auto *Inst = dyn_cast<Instruction>(Op)) {
+        llvm::LLVMContext &Ctx = Inst->getContext();
+        llvm::Metadata *VarNameMetadata =
+            llvm::MDString::get(Ctx, StrRef.substr(4)); // skip "var "
+        llvm::MDNode *Node = llvm::MDNode::get(Ctx, {VarNameMetadata});
+        Inst->setMetadata("variable_annotation", Node);
+      }
+    }
+  }
+}
+
 bool readBackend(Function &F) {
   // Backend priority : Serial < OpenMP < CUDA
   auto AddBackendAttr = [](Function &F, std::string Backend) {
@@ -536,10 +557,19 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   readBackend(F);
   extractLoopBoundAnnotation(F, LI, DT);
   moveInnerLoopLoad(F);
+
+  extractVarAnnotations(F);
+
   if (F.hasFnAttribute("polly.backend")) {
     llvm::Attribute Attr = F.getFnAttribute("polly.backend");
     llvm::StringRef Value = Attr.getValueAsString();
     llvm::errs() << "Backend = " << Value << "\n";
+  }
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error(
+        "Function verification failed after ExtractAnnotatedFromLoop pass on " +
+        F.getName());
   }
 
   LLVM_DEBUG(errs() << "ExtractAnnotatedFromLoop pass done\n");
