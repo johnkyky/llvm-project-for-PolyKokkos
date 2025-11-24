@@ -1424,10 +1424,10 @@ void ScopBuilder::addRecordedAssumptions() {
 void ScopBuilder::addUserAssumptions(
     AssumptionCache &AC, DenseMap<BasicBlock *, isl::set> &InvalidDomainMap) {
   for (auto &Assumption : AC.assumptions()) {
-    errs() << "Processing user assumption: " << *Assumption << "\n";
     auto *CI = dyn_cast_or_null<CallInst>(Assumption);
     if (!CI || CI->arg_size() != 1)
       continue;
+    errs() << "Processing user assumption: " << *Assumption << "\n";
 
     bool InScop = scop->contains(CI);
     if (!InScop && !scop->isDominatedBy(DT, CI->getParent()))
