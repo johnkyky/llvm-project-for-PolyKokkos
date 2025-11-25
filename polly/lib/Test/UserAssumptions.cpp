@@ -12,10 +12,12 @@
 #include "polly/Test/UserAssumptions.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/LoopFusion.h"
+#include "polly/Test/VarFusion.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include <charconv>
 #include <optional>
@@ -35,7 +37,7 @@ struct PolicyBound {
   size_t BoundIndex;
 
   // IR
-  Instruction *InstBound = nullptr;
+  Instruction *Inst = nullptr;
 
   // If assumption set policy bound to a literal value
   // we need to remember it here
@@ -47,7 +49,19 @@ struct PolicyBound {
            BoundType == Other.BoundType && BoundIndex == Other.BoundIndex;
   }
 };
-using Variable = std::string;
+
+struct Variable {
+  std::string Name;
+
+  Instruction *Inst = nullptr;
+
+  // If assumption set Variable bound to a literal value
+  // we need to remember it here
+  bool IsLiteral = false;
+  long LiteralValue = 0;
+
+  bool operator==(const Variable &Other) const { return Name == Other.Name; }
+};
 using Literal = long;
 
 using Operand = std::variant<PolicyBound, Variable, Literal>;
@@ -94,9 +108,9 @@ std::string operandToString(const Operand &Operand) {
           return Arg.Policy + std::to_string(Arg.PolicyIndex) + "." +
                  Arg.BoundType + std::to_string(Arg.BoundIndex);
         } else if constexpr (std::is_same_v<T, Literal>) {
-          return "int" + std::to_string(Arg);
-        } else {
-          return "variable" + Arg;
+          return "int(" + std::to_string(Arg) + ")";
+        } else if constexpr (std::is_same_v<T, Variable>) {
+          return "variable(" + Arg.Name + ")";
         }
       },
       Operand);
@@ -172,7 +186,7 @@ std::optional<Operand> parseOperand(const std::string &S) {
 
   static const std::regex VarRegex("[a-zA-Z_][a-zA-Z0-9_]*");
   if (std::regex_match(S, VarRegex)) {
-    return S;
+    return Variable{S};
   }
 
   return std::nullopt;
@@ -205,11 +219,9 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
     std::string RhsStr = Match[3].str();
 
     std::optional<Operand> LhsOpt = parseOperand(LhsStr);
-    if (!LhsOpt) {
+    if (not LhsOpt) {
       report_fatal_error("Left assumption operand invalid: '" + Twine(LhsStr) +
                          "'");
-    } else if (not std::holds_alternative<PolicyBound>(LhsOpt.value())) {
-      report_fatal_error("Left assumption must be a policy bound");
     }
 
     auto Op = stringToOperator(OpStr);
@@ -218,12 +230,13 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
     }
 
     std::optional<Operand> RhsOpt = parseOperand(RhsStr);
-    if (!RhsOpt) {
+    if (not RhsOpt) {
       report_fatal_error("Right assumption operand invalid: '" + Twine(RhsStr) +
                          "'");
     }
 
-    if (std::holds_alternative<PolicyBound>(RhsOpt.value())) {
+    if (std::holds_alternative<PolicyBound>(LhsOpt.value()) and
+        std::holds_alternative<PolicyBound>(RhsOpt.value())) {
       auto &LHSBound = std::get<PolicyBound>(LhsOpt.value());
       auto &RHSBound = std::get<PolicyBound>(RhsOpt.value());
       if (LHSBound.PolicyIndex == RHSBound.PolicyIndex and
@@ -233,6 +246,29 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
                            "different: '" +
                            Twine(CompStdStr) + "'");
       }
+    }
+
+    if (std::holds_alternative<Variable>(LhsOpt.value()) and
+        std::holds_alternative<Variable>(RhsOpt.value())) {
+      auto &LHSVar = std::get<Variable>(LhsOpt.value());
+      auto &RHSVar = std::get<Variable>(RhsOpt.value());
+      if (LHSVar.Name == RHSVar.Name) {
+        report_fatal_error("Left and right assumption variable must be "
+                           "different: '" +
+                           Twine(CompStdStr) + "'");
+      }
+    }
+
+    if (std::holds_alternative<Literal>(LhsOpt.value()) and
+        std::holds_alternative<Literal>(RhsOpt.value())) {
+      report_fatal_error(
+          "At least one operand must be a policy bound or variable: '" +
+          Twine(CompStdStr) + "'");
+    }
+
+    if (std::holds_alternative<Literal>(LhsOpt.value())) {
+      std::swap(LhsOpt, RhsOpt);
+      Op = getReverseOperator(Op);
     }
 
     Comparison Comp;
@@ -246,9 +282,7 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
   return Results;
 }
 
-StringRef
-extractAssumptionAnnotation(Function &F,
-                            SmallVector<LoopBoundT, 4> &LoopBoundVec) {
+StringRef extractAssumptionAnnotation(Function &F) {
   StringRef AssumptionsStr;
   bool FindedAssumption = false;
   for (auto &BB : F) {
@@ -285,13 +319,14 @@ extractAssumptionAnnotation(Function &F,
   return AssumptionsStr;
 }
 
-std::vector<Comparison>
-parseAssumptions(StringRef AssumptionsStr,
-                 SmallVector<LoopBoundT, 4> &LoopBoundVec) {
+std::vector<Comparison> parseAssumptions(
+    StringRef AssumptionsStr, SmallVector<LoopBoundT, 4> &LoopBoundPolicyVec,
+    SmallVector<std::pair<Instruction *, StringRef>, 2> &LoopBoundVarVec) {
 
   auto ComparaisonVec = parseComparisons(AssumptionsStr.str());
 
-  auto Lambda = [&LoopBoundVec](auto &C) -> bool {
+  auto IsValidLoopBound = [&LoopBoundPolicyVec,
+                           &LoopBoundVarVec](auto &C) -> bool {
     if (std::holds_alternative<PolicyBound>(C)) {
       auto &HS = std::get<PolicyBound>(C);
 
@@ -299,29 +334,42 @@ parseAssumptions(StringRef AssumptionsStr,
           HS.BoundType == "lower" ? LoopBoundT::Lower : LoopBoundT::Upper;
 
       auto It = std::find_if(
-          LoopBoundVec.begin(), LoopBoundVec.end(), [&](const LoopBoundT &LB) {
+          LoopBoundPolicyVec.begin(), LoopBoundPolicyVec.end(),
+          [&](const LoopBoundT &LB) {
             if (HS.PolicyIndex == LB.IndexPolicy and
                 BoundType == LB.BoundType and (HS.BoundIndex) == LB.Depth) {
               return true;
             }
             return false;
           });
-      if (It != LoopBoundVec.end()) {
-        HS.InstBound = It->Inst;
+      if (It != LoopBoundPolicyVec.end()) {
+        HS.Inst = It->Inst;
       } else {
         return false;
       }
+    }
+    if (std::holds_alternative<Variable>(C)) {
+      auto &Var = std::get<Variable>(C);
+      auto It =
+          std::find_if(LoopBoundVarVec.begin(), LoopBoundVarVec.end(),
+                       [&](const std::pair<Instruction *, StringRef> &VarInst) {
+                         return Var.Name == VarInst.second.str();
+                       });
+      if (It == LoopBoundVarVec.end()) {
+        return false;
+      }
+      Var.Inst = It->first;
     }
     return true;
   };
 
   for (auto C = ComparaisonVec.begin(); C != ComparaisonVec.end();) {
-    if (not Lambda(C->LHS)) {
+    if (not IsValidLoopBound(C->LHS)) {
       errs() << "LHS assumption failed in : " << comparisonToString(*C) << "\n";
       C = ComparaisonVec.erase(C);
       continue;
     }
-    if (not Lambda(C->RHS)) {
+    if (not IsValidLoopBound(C->RHS)) {
       errs() << "RHS assumption failed in : " << comparisonToString(*C) << "\n";
       C = ComparaisonVec.erase(C);
       continue;
@@ -332,111 +380,17 @@ parseAssumptions(StringRef AssumptionsStr,
   return ComparaisonVec;
 }
 
+Instruction *findDominatingInstruction(Instruction *A, Instruction *B,
+                                       DominatorTree &DT) {
+  if (DT.dominates(A, B))
+    return A;
+  if (DT.dominates(B, A))
+    return B;
+  llvm_unreachable("No dominating instruction found between the two.");
+}
+
 void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
                           std::vector<Comparison> &Assumptions);
-
-void applyPolicyVsPolicy(Comparison &C, Function &F, IRBuilder<> &Builder,
-                         std::vector<Comparison> &Assumptions,
-                         DominatorTree &DT) {
-  LLVM_DEBUG(errs() << "Applying policy vs policy assumption: "
-                    << comparisonToString(C) << "\n");
-  auto &LHS = std::get<PolicyBound>(C.LHS);
-  auto &RHS = std::get<PolicyBound>(C.RHS);
-
-  if (LHS.IsLiteral and RHS.IsLiteral) {
-    return;
-  }
-
-  if (LHS.IsLiteral) {
-    std::swap(C.LHS, C.RHS);
-    C.Op = getReverseOperator(C.Op);
-    applyPolicyVsLiteral(C, F, Builder, Assumptions);
-    return;
-  }
-  if (RHS.IsLiteral) {
-    applyPolicyVsLiteral(C, F, Builder, Assumptions);
-    return;
-  }
-
-  if (LHS.PolicyIndex > RHS.PolicyIndex) {
-    std::swap(LHS, RHS);
-    C.Op = getReverseOperator(C.Op);
-  }
-
-  auto *LHSInst = LHS.InstBound;
-  auto *RHSInst = RHS.InstBound;
-
-  if (!LHSInst || !RHSInst) {
-    llvm_unreachable("Instruction de borne nulle, la liaison a échoué.");
-  }
-
-  if (not LHSInst or not RHSInst) {
-    errs() << "Failed to bind policy bound in assumption: "
-           << comparisonToString(C) << "\n";
-    return;
-  }
-
-  switch (C.Op) {
-  case Comparison::Operator::EQUAL: {
-    LLVM_DEBUG(errs() << "Replacing " << *RHSInst << " with " << *LHSInst
-                      << "\n");
-    RHSInst->replaceAllUsesWith(LHSInst);
-
-    // Update other assumptions that reference RHSInst to use LHSInst
-    for (auto &OtherC : Assumptions) {
-      if (&OtherC == &C)
-        continue;
-      bool Updated = false;
-      if (std::holds_alternative<PolicyBound>(OtherC.LHS)) {
-        auto &OtherLHS = std::get<PolicyBound>(OtherC.LHS);
-        if (OtherLHS.InstBound == RHSInst) {
-          OtherLHS.InstBound = LHSInst;
-          Updated = true;
-        }
-      }
-      if (std::holds_alternative<PolicyBound>(OtherC.RHS)) {
-        auto &OtherRHS = std::get<PolicyBound>(OtherC.RHS);
-        if (OtherRHS.InstBound == RHSInst) {
-          OtherRHS.InstBound = LHSInst;
-          Updated = true;
-        }
-      }
-      if (Updated) {
-        LLVM_DEBUG(errs() << "Updated related assumption: "
-                          << comparisonToString(OtherC) << "\n");
-      }
-    }
-    break;
-  }
-  case Comparison::Operator::NOT_EQUAL:
-  case Comparison::Operator::LESS:
-  case Comparison::Operator::GREATER:
-  case Comparison::Operator::LESS_EQUAL:
-  case Comparison::Operator::GREATER_EQUAL: {
-    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ; // Init
-    if (C.Op == Comparison::Operator::NOT_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_NE;
-    if (C.Op == Comparison::Operator::LESS)
-      Pred = CmpInst::Predicate::ICMP_SLT; // Signed Less Than
-    if (C.Op == Comparison::Operator::GREATER)
-      Pred = CmpInst::Predicate::ICMP_SGT;
-    if (C.Op == Comparison::Operator::LESS_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_SLE;
-    if (C.Op == Comparison::Operator::GREATER_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_SGE;
-
-    llvm::Instruction *InsertLoc = nullptr;
-    DT.dominates(LHSInst, RHSInst) ? InsertLoc = RHSInst : InsertLoc = LHSInst;
-    Builder.SetInsertPoint(InsertLoc->getNextNode());
-    llvm::Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
-    llvm::Value *Assumption = Builder.CreateAssumption(Cmp);
-    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
-    break;
-  }
-  default:
-    llvm_unreachable("Opérateur inconnu dans une comparaison validée.");
-  }
-}
 
 void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
                           std::vector<Comparison> &Assumptions) {
@@ -445,7 +399,7 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
   auto &LHS = std::get<PolicyBound>(C.LHS);
   auto &RHS = std::get<Literal>(C.RHS);
 
-  auto *BoundInst = LHS.InstBound;
+  auto *BoundInst = LHS.Inst;
   if (!BoundInst)
     llvm_unreachable("Instruction de borne nulle.");
 
@@ -532,6 +486,218 @@ void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     break;
   }
   default:
+    break;
+  }
+}
+
+void applyVariableVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
+                            std::vector<Comparison> &Assumptions) {
+  LLVM_DEBUG(errs() << "Applying variable vs literal assumption: "
+                    << comparisonToString(C) << "\n");
+  auto &LHS = std::get<Variable>(C.LHS);
+  auto &RHS = std::get<Literal>(C.RHS);
+
+  auto *VarInst = LHS.Inst;
+
+  if (!VarInst)
+    llvm_unreachable("Instruction de variable nulle.");
+
+  Constant *ConstVal = ConstantInt::get(VarInst->getType(), RHS);
+
+  switch (C.Op) {
+  case Comparison::Operator::EQUAL: {
+    LLVM_DEBUG(errs() << "Replacing " << *VarInst << " with constant "
+                      << *ConstVal << "\n");
+    VarInst->replaceAllUsesWith(ConstVal);
+
+    LHS.IsLiteral = true;
+    LHS.LiteralValue = RHS;
+
+    auto Begin = std::find_if(
+        Assumptions.begin(), Assumptions.end(),
+        [&C](const Comparison &Assumption) { return &Assumption == &C; });
+    if (Begin != Assumptions.end())
+      Begin++;
+    for (auto It = Begin; It != Assumptions.end(); ++It) {
+      auto &OtherC = *It;
+      bool Updated = false;
+      if (std::holds_alternative<Variable>(OtherC.LHS) and
+          not std::holds_alternative<Literal>(OtherC.RHS)) {
+        auto &OtherVarLHS = std::get<Variable>(OtherC.LHS);
+        if (OtherVarLHS == LHS) {
+          OtherC.LHS = RHS;
+          std::swap(OtherC.LHS, OtherC.RHS);
+          OtherC.Op = getReverseOperator(OtherC.Op);
+          Updated = true;
+        }
+      }
+      if (std::holds_alternative<Variable>(OtherC.RHS)) {
+        auto &OtherRHS = std::get<Variable>(OtherC.RHS);
+        if (OtherRHS == LHS) {
+          OtherC.RHS = RHS;
+          Updated = true;
+        }
+      }
+      if (Updated) {
+        LLVM_DEBUG(errs() << "Updated related assumption: "
+                          << comparisonToString(OtherC) << "\n");
+      }
+    }
+
+    break;
+  }
+  case Comparison::Operator::NOT_EQUAL:
+  case Comparison::Operator::LESS:
+  case Comparison::Operator::GREATER:
+  case Comparison::Operator::LESS_EQUAL:
+  case Comparison::Operator::GREATER_EQUAL: {
+    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ;
+    if (C.Op == Comparison::Operator::NOT_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_NE;
+    if (C.Op == Comparison::Operator::LESS)
+      Pred = CmpInst::Predicate::ICMP_SLT;
+    if (C.Op == Comparison::Operator::GREATER)
+      Pred = CmpInst::Predicate::ICMP_SGT;
+    if (C.Op == Comparison::Operator::LESS_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SLE;
+    if (C.Op == Comparison::Operator::GREATER_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SGE;
+
+    Builder.SetInsertPoint(VarInst->getNextNode());
+    llvm::Value *Cmp = Builder.CreateICmp(Pred, VarInst, ConstVal);
+    llvm::Value *Assumption = Builder.CreateAssumption(Cmp);
+    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+template <typename T, typename U>
+void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
+                                 IRBuilder<> &Builder,
+                                 std::vector<Comparison> &Assumptions,
+                                 DominatorTree &DT) {
+  LLVM_DEBUG(errs() << "Applying policy vs policy assumption: "
+                    << comparisonToString(C) << "\n");
+  auto &LHS = std::get<T>(C.LHS);
+  auto &RHS = std::get<U>(C.RHS);
+
+  if (LHS.IsLiteral and RHS.IsLiteral) {
+    if (LHS.LiteralValue != RHS.LiteralValue) {
+      report_fatal_error("Conflicting literal values in assumption: " +
+                         Twine(comparisonToString(C)));
+    }
+    return;
+  }
+
+  if (LHS.IsLiteral) {
+    std::swap(C.LHS, C.RHS);
+    C.Op = getReverseOperator(C.Op);
+    applyVariableVsLiteral(C, F, Builder, Assumptions);
+    return;
+  }
+  if (RHS.IsLiteral) {
+    applyPolicyVsLiteral(C, F, Builder, Assumptions);
+    return;
+  }
+
+  auto *LHSInst = LHS.Inst;
+  auto *RHSInst = RHS.Inst;
+
+  if (not LHSInst or not RHSInst) {
+    report_fatal_error("Failed to bind policy bound in assumption: " +
+                       Twine(comparisonToString(C)));
+    return;
+  }
+
+  switch (C.Op) {
+  case Comparison::Operator::EQUAL: {
+
+    Instruction *Replacer = findDominatingInstruction(LHSInst, RHSInst, DT);
+    Instruction *Replaced = (Replacer == LHSInst) ? RHSInst : LHSInst;
+    LLVM_DEBUG(errs() << "Replacing " << *Replaced << " with " << *Replacer
+                      << "\n");
+    Replaced->replaceAllUsesWith(Replacer);
+
+    // Update other assumptions that reference RHSInst to use LHSInst
+    auto Begin = std::find_if(
+        Assumptions.begin(), Assumptions.end(),
+        [&C](const Comparison &Assumption) { return &Assumption == &C; });
+    if (Begin != Assumptions.end())
+      Begin++;
+    for (auto It = Begin; It != Assumptions.end(); ++It) {
+      auto &OtherC = *It;
+      if (&OtherC == &C)
+        continue;
+      bool Updated = false;
+      if (not std::holds_alternative<Literal>(OtherC.LHS)) {
+        if (auto OtherLHS = std::get_if<PolicyBound>(&OtherC.LHS)) {
+          if (OtherLHS->Inst == RHSInst) {
+            OtherLHS->Inst = LHSInst;
+            Updated = true;
+          }
+        } else if (auto OtherLHS = std::get_if<Variable>(&OtherC.LHS)) {
+          if (OtherLHS->Inst == RHSInst) {
+            OtherLHS->Inst = LHSInst;
+            Updated = true;
+          }
+        } else {
+          report_fatal_error("Unexpected operand type in assumption: " +
+                             Twine(comparisonToString(OtherC)));
+        }
+      }
+      if (std::holds_alternative<Variable>(OtherC.RHS)) {
+        if (auto OtherRHS = std::get_if<PolicyBound>(&OtherC.RHS)) {
+          if (OtherRHS->Inst == RHSInst) {
+            OtherRHS->Inst = LHSInst;
+            Updated = true;
+          }
+        } else if (auto OtherRHS = std::get_if<Variable>(&OtherC.RHS)) {
+          if (OtherRHS->Inst == RHSInst) {
+            OtherRHS->Inst = LHSInst;
+            Updated = true;
+          }
+        } else {
+          report_fatal_error("bieUnexpected operand type in assumption: " +
+                             Twine(comparisonToString(OtherC)));
+        }
+      }
+      if (Updated) {
+        LLVM_DEBUG(errs() << "Updated related assumption: "
+                          << comparisonToString(OtherC) << "\n");
+      }
+    }
+    break;
+  }
+  case Comparison::Operator::NOT_EQUAL:
+  case Comparison::Operator::LESS:
+  case Comparison::Operator::GREATER:
+  case Comparison::Operator::LESS_EQUAL:
+  case Comparison::Operator::GREATER_EQUAL: {
+    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ;
+    if (C.Op == Comparison::Operator::NOT_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_NE;
+    if (C.Op == Comparison::Operator::LESS)
+      Pred = CmpInst::Predicate::ICMP_SLT;
+    if (C.Op == Comparison::Operator::GREATER)
+      Pred = CmpInst::Predicate::ICMP_SGT;
+    if (C.Op == Comparison::Operator::LESS_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SLE;
+    if (C.Op == Comparison::Operator::GREATER_EQUAL)
+      Pred = CmpInst::Predicate::ICMP_SGE;
+
+    Instruction *InsertLoc =
+        findDominatingInstruction(LHSInst, RHSInst, DT) == LHSInst ? RHSInst
+                                                                   : LHSInst;
+    Builder.SetInsertPoint(InsertLoc->getNextNode());
+    Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
+    Value *Assumption = Builder.CreateAssumption(Cmp);
+    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+    break;
+  }
+  default:
     llvm_unreachable("Opérateur inconnu dans une comparaison validée.");
   }
 }
@@ -551,10 +717,26 @@ void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
 
           if constexpr (std::is_same_v<T1, PolicyBound> &&
                         std::is_same_v<T2, PolicyBound>) {
-            applyPolicyVsPolicy(Assumption, F, Builder, Assumptions, DT);
+            applyNotLiteralVsNotLiteral<PolicyBound, PolicyBound>(
+                Assumption, F, Builder, Assumptions, DT);
+          } else if constexpr (std::is_same_v<T1, Variable> &&
+                               std::is_same_v<T2, Variable>) {
+            applyNotLiteralVsNotLiteral<Variable, Variable>(
+                Assumption, F, Builder, Assumptions, DT);
+          } else if constexpr (std::is_same_v<T1, Variable> &&
+                               std::is_same_v<T2, PolicyBound>) {
+            applyNotLiteralVsNotLiteral<Variable, PolicyBound>(
+                Assumption, F, Builder, Assumptions, DT);
+          } else if constexpr (std::is_same_v<T1, PolicyBound> &&
+                               std::is_same_v<T2, Variable>) {
+            applyNotLiteralVsNotLiteral<PolicyBound, Variable>(
+                Assumption, F, Builder, Assumptions, DT);
           } else if constexpr (std::is_same_v<T1, PolicyBound> &&
                                std::is_same_v<T2, Literal>) {
             applyPolicyVsLiteral(Assumption, F, Builder, Assumptions);
+          } else if constexpr (std::is_same_v<T1, Variable> &&
+                               std::is_same_v<T2, Literal>) {
+            applyVariableVsLiteral(Assumption, F, Builder, Assumptions);
           } else {
             llvm_unreachable("Other combinations are not supported yet.");
           }
@@ -576,8 +758,10 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
   LLVM_DEBUG(errs() << LBA << "\n");
 
-  auto AssumptionsStr = extractAssumptionAnnotation(F, LBA);
-  auto Assumptions = parseAssumptions(AssumptionsStr, LBA);
+  auto AssumptionsStr = extractAssumptionAnnotation(F);
+  auto LoopBoundVariableInstructions = polly::findVarInstructions(F);
+  auto Assumptions =
+      parseAssumptions(AssumptionsStr, LBA, LoopBoundVariableInstructions);
 
   for (const auto &Cmp : Assumptions)
     LLVM_DEBUG(errs() << comparisonToString(Cmp) << "\n");
