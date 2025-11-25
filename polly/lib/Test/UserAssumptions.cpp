@@ -389,126 +389,38 @@ Instruction *findDominatingInstruction(Instruction *A, Instruction *B,
   llvm_unreachable("No dominating instruction found between the two.");
 }
 
-void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
-                          std::vector<Comparison> &Assumptions);
-
-void applyPolicyVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
-                          std::vector<Comparison> &Assumptions) {
-  LLVM_DEBUG(errs() << "Applying policy vs literal assumption: "
+template <typename T>
+void applyNotLiteralVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
+                              std::vector<Comparison> &Assumptions) {
+  LLVM_DEBUG(errs() << "Applying policy/variable vs literal assumption: "
                     << comparisonToString(C) << "\n");
-  auto &LHS = std::get<PolicyBound>(C.LHS);
+  auto &LHS = std::get<T>(C.LHS);
   auto &RHS = std::get<Literal>(C.RHS);
 
-  auto *BoundInst = LHS.Inst;
-  if (!BoundInst)
-    llvm_unreachable("Instruction de borne nulle.");
+  auto *Inst = LHS.Inst;
 
-  Constant *ConstVal = ConstantInt::get(BoundInst->getType(), RHS);
+  if (!Inst)
+    llvm_unreachable("Instruction de variable nulle.");
+
+  Constant *ConstVal = ConstantInt::get(Inst->getType(), RHS);
 
   switch (C.Op) {
   case Comparison::Operator::EQUAL: {
-    LLVM_DEBUG(errs() << "Replacing " << *BoundInst << " with constant "
-                      << *ConstVal << "\n");
+    LLVM_DEBUG(errs() << "Replacing " << *Inst << " with constant " << *ConstVal
+                      << "\n");
 
-    for (auto *User : BoundInst->users()) {
+    for (auto *User : Inst->users()) {
       if (auto *ICmp = dyn_cast<ICmpInst>(User)) {
-        Module *M = BoundInst->getModule();
+        Module *M = Inst->getModule();
         unsigned SourceKindID = M->getMDKindID("loop_bound_information");
         unsigned DestKindID = M->getMDKindID("old_loop_bound");
 
-        if (MDNode *Node = BoundInst->getMetadata(SourceKindID))
+        if (MDNode *Node = Inst->getMetadata(SourceKindID))
           ICmp->setMetadata(DestKindID, Node);
       }
     }
 
-    BoundInst->replaceAllUsesWith(ConstVal);
-
-    LHS.IsLiteral = true;
-    LHS.LiteralValue = RHS;
-
-    // Update other assumptions that reference BoundInst to use ConstVal
-    auto Begin = std::find_if(
-        Assumptions.begin(), Assumptions.end(),
-        [&C](const Comparison &Assumption) { return &Assumption == &C; });
-    if (Begin != Assumptions.end())
-      Begin++;
-    for (auto It = Begin; It != Assumptions.end(); ++It) {
-      auto &OtherC = *It;
-      bool Updated = false;
-      if (std::holds_alternative<PolicyBound>(OtherC.LHS) and
-          std::holds_alternative<PolicyBound>(OtherC.RHS)) {
-        auto &OtherLHS = std::get<PolicyBound>(OtherC.LHS);
-        if (OtherLHS == LHS) {
-          OtherC.LHS = RHS;
-          std::swap(OtherC.LHS, OtherC.RHS);
-          OtherC.Op = getReverseOperator(OtherC.Op);
-          Updated = true;
-        }
-      }
-      if (std::holds_alternative<PolicyBound>(OtherC.RHS)) {
-        auto &OtherRHS = std::get<PolicyBound>(OtherC.RHS);
-        if (OtherRHS == LHS) {
-          OtherC.RHS = RHS;
-          Updated = true;
-        }
-      }
-      if (Updated) {
-        LLVM_DEBUG(errs() << "Updated related assumption: "
-                          << comparisonToString(OtherC) << "\n");
-      }
-    }
-
-    break;
-  }
-  case Comparison::Operator::NOT_EQUAL:
-  case Comparison::Operator::LESS:
-  case Comparison::Operator::GREATER:
-  case Comparison::Operator::LESS_EQUAL:
-  case Comparison::Operator::GREATER_EQUAL: {
-    CmpInst::Predicate Pred = CmpInst::Predicate::ICMP_EQ;
-    if (C.Op == Comparison::Operator::NOT_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_NE;
-    if (C.Op == Comparison::Operator::LESS)
-      Pred = CmpInst::Predicate::ICMP_SLT;
-    if (C.Op == Comparison::Operator::GREATER)
-      Pred = CmpInst::Predicate::ICMP_SGT;
-    if (C.Op == Comparison::Operator::LESS_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_SLE;
-    if (C.Op == Comparison::Operator::GREATER_EQUAL)
-      Pred = CmpInst::Predicate::ICMP_SGE;
-
-    Builder.SetInsertPoint(BoundInst->getNextNode());
-    Value *Cmp = Builder.CreateICmp(Pred, BoundInst, ConstVal);
-    Value *Assumption = Builder.CreateAssumption(Cmp);
-
-    LLVM_DEBUG(errs() << "Registering assumption " << *Cmp << " -> "
-                      << *Assumption << "\n");
-    break;
-  }
-  default:
-    break;
-  }
-}
-
-void applyVariableVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
-                            std::vector<Comparison> &Assumptions) {
-  LLVM_DEBUG(errs() << "Applying variable vs literal assumption: "
-                    << comparisonToString(C) << "\n");
-  auto &LHS = std::get<Variable>(C.LHS);
-  auto &RHS = std::get<Literal>(C.RHS);
-
-  auto *VarInst = LHS.Inst;
-
-  if (!VarInst)
-    llvm_unreachable("Instruction de variable nulle.");
-
-  Constant *ConstVal = ConstantInt::get(VarInst->getType(), RHS);
-
-  switch (C.Op) {
-  case Comparison::Operator::EQUAL: {
-    LLVM_DEBUG(errs() << "Replacing " << *VarInst << " with constant "
-                      << *ConstVal << "\n");
-    VarInst->replaceAllUsesWith(ConstVal);
+    Inst->replaceAllUsesWith(ConstVal);
 
     LHS.IsLiteral = true;
     LHS.LiteralValue = RHS;
@@ -521,9 +433,9 @@ void applyVariableVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     for (auto It = Begin; It != Assumptions.end(); ++It) {
       auto &OtherC = *It;
       bool Updated = false;
-      if (std::holds_alternative<Variable>(OtherC.LHS) and
+      if (std::holds_alternative<T>(OtherC.LHS) and
           not std::holds_alternative<Literal>(OtherC.RHS)) {
-        auto &OtherVarLHS = std::get<Variable>(OtherC.LHS);
+        auto &OtherVarLHS = std::get<T>(OtherC.LHS);
         if (OtherVarLHS == LHS) {
           OtherC.LHS = RHS;
           std::swap(OtherC.LHS, OtherC.RHS);
@@ -531,8 +443,8 @@ void applyVariableVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
           Updated = true;
         }
       }
-      if (std::holds_alternative<Variable>(OtherC.RHS)) {
-        auto &OtherRHS = std::get<Variable>(OtherC.RHS);
+      if (std::holds_alternative<T>(OtherC.RHS)) {
+        auto &OtherRHS = std::get<T>(OtherC.RHS);
         if (OtherRHS == LHS) {
           OtherC.RHS = RHS;
           Updated = true;
@@ -563,10 +475,11 @@ void applyVariableVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     if (C.Op == Comparison::Operator::GREATER_EQUAL)
       Pred = CmpInst::Predicate::ICMP_SGE;
 
-    Builder.SetInsertPoint(VarInst->getNextNode());
-    llvm::Value *Cmp = Builder.CreateICmp(Pred, VarInst, ConstVal);
+    Builder.SetInsertPoint(Inst->getNextNode());
+    llvm::Value *Cmp = Builder.CreateICmp(Pred, Inst, ConstVal);
     llvm::Value *Assumption = Builder.CreateAssumption(Cmp);
-    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+    LLVM_DEBUG(errs() << "Registering assumption " << *Cmp << " -> "
+                      << *Assumption << "\n");
     break;
   }
   default:
@@ -579,8 +492,9 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
                                  IRBuilder<> &Builder,
                                  std::vector<Comparison> &Assumptions,
                                  DominatorTree &DT) {
-  LLVM_DEBUG(errs() << "Applying policy vs policy assumption: "
-                    << comparisonToString(C) << "\n");
+  LLVM_DEBUG(
+      errs() << "Applying policy/variable vs policy/variable assumption: "
+             << comparisonToString(C) << "\n");
   auto &LHS = std::get<T>(C.LHS);
   auto &RHS = std::get<U>(C.RHS);
 
@@ -595,11 +509,11 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
   if (LHS.IsLiteral) {
     std::swap(C.LHS, C.RHS);
     C.Op = getReverseOperator(C.Op);
-    applyVariableVsLiteral(C, F, Builder, Assumptions);
+    applyNotLiteralVsLiteral<U>(C, F, Builder, Assumptions);
     return;
   }
   if (RHS.IsLiteral) {
-    applyPolicyVsLiteral(C, F, Builder, Assumptions);
+    applyNotLiteralVsLiteral<T>(C, F, Builder, Assumptions);
     return;
   }
 
@@ -607,7 +521,7 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
   auto *RHSInst = RHS.Inst;
 
   if (not LHSInst or not RHSInst) {
-    report_fatal_error("Failed to bind policy bound in assumption: " +
+    report_fatal_error("Failed to bind policy/variable bound in assumption: " +
                        Twine(comparisonToString(C)));
     return;
   }
@@ -660,7 +574,7 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
             Updated = true;
           }
         } else {
-          report_fatal_error("bieUnexpected operand type in assumption: " +
+          report_fatal_error("Unexpected operand type in assumption: " +
                              Twine(comparisonToString(OtherC)));
         }
       }
@@ -733,10 +647,12 @@ void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
                 Assumption, F, Builder, Assumptions, DT);
           } else if constexpr (std::is_same_v<T1, PolicyBound> &&
                                std::is_same_v<T2, Literal>) {
-            applyPolicyVsLiteral(Assumption, F, Builder, Assumptions);
+            applyNotLiteralVsLiteral<PolicyBound>(Assumption, F, Builder,
+                                                  Assumptions);
           } else if constexpr (std::is_same_v<T1, Variable> &&
                                std::is_same_v<T2, Literal>) {
-            applyVariableVsLiteral(Assumption, F, Builder, Assumptions);
+            applyNotLiteralVsLiteral<Variable>(Assumption, F, Builder,
+                                               Assumptions);
           } else {
             llvm_unreachable("Other combinations are not supported yet.");
           }
