@@ -1828,8 +1828,7 @@ bool ScopDetection::isProfitableRegion(DetectionContext &Context) const {
 bool ScopDetection::isValidRegion(DetectionContext &Context) {
   Region &CurRegion = Context.CurRegion;
 
-  POLLY_DEBUG(dbgs() << "Checking region: " << CurRegion.getNameStr()
-                     << "\n\t");
+  POLLY_DEBUG(dbgs() << "Checking region: " << CurRegion.getNameStr() << "\n");
 
   if (!PollyAllowFullFunction && CurRegion.isTopLevelRegion()) {
     POLLY_DEBUG(dbgs() << "Top level region is invalid\n");
