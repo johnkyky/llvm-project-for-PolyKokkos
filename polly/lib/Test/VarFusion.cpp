@@ -10,26 +10,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/VarFusion.h"
-#include "polly/Test/ExtractAnnotatedFromLoop.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionExpressions.h"
-#include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Dominators.h"
-#include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
-#include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Pass.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
-#include <algorithm>
-#include <stack>
 
 #define DEBUG_TYPE "polly-var-fusion"
 
@@ -38,30 +25,9 @@ using namespace polly;
 
 namespace {
 
-void extractVarAnnotations(Function &F, DominatorTree &DT) {
-  SmallSetVector<std::pair<Value *, StringRef>, 4> Annotations;
-  for (auto &BB : F) {
-    for (auto &I : BB) {
-      if (I.hasMetadata("variable_annotation")) {
-        MDNode *Node = I.getMetadata("variable_annotation");
-        if (Node->getNumOperands() != 1) {
-          report_fatal_error("VarFusion pass on " + F.getName() +
-                             " : Variable annotation bad format\n");
-        }
-        auto *VarNameMD = dyn_cast<MDString>(Node->getOperand(0));
-        if (!VarNameMD) {
-          report_fatal_error("VarFusion pass on " + F.getName() +
-                             " : Variable annotation bad format\n");
-        }
-        StringRef VarName = VarNameMD->getString();
-        Annotations.insert({&I, VarName});
-        errs() << "Variable annotation found: " << I << " -> " << VarName
-               << "\n";
-      }
-    }
-  }
+void fusionVarAnnotations(Function &F, DominatorTree &DT) {
+  auto Annotations = findVarInstructions(F);
 
-  // fusion annotations with same variable name
   for (auto &[V, Name] : Annotations) {
     errs() << "Final Variable annotation: " << *V << " -> " << Name << "\n";
   }
@@ -101,6 +67,34 @@ void extractVarAnnotations(Function &F, DominatorTree &DT) {
 
 } // namespace
 
+SmallVector<std::pair<Instruction *, StringRef>, 2>
+polly::findVarInstructions(Function &F) {
+  SmallSetVector<std::pair<Instruction *, StringRef>, 2> Annotations;
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      if (I.hasMetadata("variable_annotation")) {
+        MDNode *Node = I.getMetadata("variable_annotation");
+        if (Node->getNumOperands() != 1) {
+          report_fatal_error("VarFusion pass on " + F.getName() +
+                             " : Variable annotation bad format\n");
+        }
+        auto *VarNameMD = dyn_cast<MDString>(Node->getOperand(0));
+        if (!VarNameMD) {
+          report_fatal_error("VarFusion pass on " + F.getName() +
+                             " : Variable annotation bad format\n");
+        }
+        StringRef VarName = VarNameMD->getString();
+        Annotations.insert({&I, VarName});
+        errs() << "Variable annotation found: " << I << " -> " << VarName
+               << "\n";
+      }
+    }
+  }
+  SmallVector<std::pair<Instruction *, StringRef>, 2> Result(
+      {Annotations.begin(), Annotations.end()});
+  return Result;
+}
+
 PreservedAnalyses VarFusionPass::run(Function &F, FunctionAnalysisManager &FM) {
   if (not F.hasFnAttribute("polly.findSCoP"))
     return PreservedAnalyses::all();
@@ -109,7 +103,7 @@ PreservedAnalyses VarFusionPass::run(Function &F, FunctionAnalysisManager &FM) {
 
   auto &DT = FM.getResult<DominatorTreeAnalysis>(F);
 
-  extractVarAnnotations(F, DT);
+  fusionVarAnnotations(F, DT);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error(

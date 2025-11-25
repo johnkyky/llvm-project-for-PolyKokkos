@@ -16,6 +16,9 @@ using namespace llvm;
 
 namespace polly {
 
+SmallVector<std::pair<Instruction *, StringRef>, 2>
+findVarInstructions(Function &F);
+
 struct VarFusionPass final : PassInfoMixin<VarFusionPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FM);
 };
