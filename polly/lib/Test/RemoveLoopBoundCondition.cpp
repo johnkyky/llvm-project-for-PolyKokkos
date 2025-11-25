@@ -224,6 +224,43 @@ void removeLoopBoundConditions(Function &F,
   return;
 }
 
+void removeLoopBoundVarConditions(Function &F) {
+  // useful with the annotation of loop bounds inside parallel_for
+  for (auto &BB : F) {
+    for (auto It = BB.begin(); It != BB.end();) {
+      Instruction *I = &*It;
+      ++It;
+      if (auto *CallInst = dyn_cast<llvm::CallInst>(I)) {
+        const Function *Callee = CallInst->getCalledFunction();
+        if (not Callee)
+          continue;
+        if (Callee->getName().starts_with("llvm.annotation")) {
+          for (User *U : CallInst->users()) {
+            if (Instruction *ICmp = dyn_cast<ICmpInst>(U)) {
+              bool IsConstantZero = false;
+              for (auto &Op : ICmp->operands()) {
+                if (Op == CallInst)
+                  continue;
+                if (auto *ConstOp = dyn_cast<ConstantInt>(Op)) {
+                  if (ConstOp->isZero())
+                    IsConstantZero = true;
+                }
+              }
+              if (not IsConstantZero)
+                continue;
+
+              LLVM_DEBUG(errs() << "Removing loop bound variable condition "
+                                << *ICmp << "\n";);
+              Value *FalseVal = ConstantInt::getFalse(ICmp->getContext());
+              ICmp->replaceAllUsesWith(FalseVal);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 } // namespace
 
 PreservedAnalyses
@@ -237,6 +274,7 @@ RemoveLoopBoundConditionPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
   LLVM_DEBUG(errs() << LBA << "\n";);
   removeLoopBoundConditions(F, LBA);
+  removeLoopBoundVarConditions(F);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
