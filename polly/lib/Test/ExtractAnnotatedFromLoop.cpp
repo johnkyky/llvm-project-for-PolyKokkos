@@ -534,9 +534,24 @@ SmallVector<Loop *, 2> polly::findLoop(Function &F, LoopInfo &LI,
 
   LoopsVec = filterRedundantVersions(LoopsVec);
 
-  std::sort(LoopsVec.begin(), LoopsVec.end(), [&](Loop *A, Loop *B) {
-    return DT.dominates(A->getHeader(), B->getHeader());
-  });
+  llvm::DenseMap<BasicBlock *, int> BlockOrder;
+  int Index = 0;
+  for (BasicBlock &BB : F) {
+    BlockOrder[&BB] = Index++;
+  }
+
+  std::sort(LoopsVec.begin(), LoopsVec.end(),
+            [&](const Loop *A, const Loop *B) {
+              BasicBlock *HeaderA = A->getHeader();
+              BasicBlock *HeaderB = B->getHeader();
+
+              if (DT.properlyDominates(HeaderA, HeaderB))
+                return true;
+              if (DT.properlyDominates(HeaderB, HeaderA))
+                return false;
+
+              return BlockOrder[HeaderA] < BlockOrder[HeaderB];
+            });
 
   return LoopsVec;
 }
