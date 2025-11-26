@@ -179,6 +179,19 @@ unsigned extractDimValue(ISLType &ISLObjet, isl::dim Dim) {
   return unsignedFromIslSize(ISLNbParams);
 }
 
+osl_relation_p convertContext(isl::set ISLContext) {
+  unsigned NbParams = extractDimValue(ISLContext, isl::dim::param);
+  osl_relation_p OSLContext = osl_relation_malloc(0, 2 + NbParams);
+  OSLContext->type = OSL_TYPE_CONTEXT;
+  OSLContext->precision = OSL_PRECISION_DP;
+  OSLContext->nb_output_dims = 0;
+  OSLContext->nb_input_dims = 0;
+  OSLContext->nb_local_dims = 0;
+  OSLContext->nb_parameters = NbParams;
+
+  return OSLContext;
+}
+
 osl_statement_p convertStmt(ScopStmt &Stmt,
                             SmallDenseMap<StringRef, int> &ArraysNameToId) {
   osl_statement_p OSLStmt = osl_statement_malloc();
@@ -658,23 +671,17 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   auto ArraysNameToId = addArraysExtension(OSLScop, S);
 
   // Context
-  auto C = S.getContext();
+  auto Context = S.getDefinedBehaviorContext();
 
-  auto NbParams = extractDimValue(C, isl::dim::param);
-  OSLScop->context = osl_relation_malloc(0, 2 + NbParams);
-  OSLScop->context->type = OSL_TYPE_CONTEXT;
-  OSLScop->context->precision = OSL_PRECISION_DP;
-  OSLScop->context->nb_output_dims = 0;
-  OSLScop->context->nb_input_dims = 0;
-  OSLScop->context->nb_local_dims = 0;
-  OSLScop->context->nb_parameters = NbParams;
+  osl_relation_p OSLContext = convertContext(Context);
+  OSLScop->context = OSLContext;
 
   // Parameters
   OSLScop->parameters = osl_generic_malloc();
   OSLScop->parameters->interface = osl_strings_interface();
   osl_strings_p Str = osl_strings_malloc();
-  for (unsigned I = 0; I < NbParams; I++) {
-    isl::id Id = C.get_dim_id(isl::dim::param, I);
+  for (int I = 0; I < OSLScop->context->nb_parameters; I++) {
+    isl::id Id = Context.get_dim_id(isl::dim::param, I);
     if (Id.is_null()) {
       return;
     }
@@ -685,10 +692,7 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   // Statements
   for (ScopStmt &Stmt : S) {
     osl_statement_p OSLStmt = convertStmt(Stmt, ArraysNameToId);
-    errs() << "Statement converted\n";
-    osl_statement_print(stderr, OSLStmt);
     osl_statement_add(&OSLScop->statement, OSLStmt);
-    errs() << "Statement added\n";
   }
 
   FILE *File = std::fopen(FileName.c_str(), "w");
