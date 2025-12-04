@@ -17,7 +17,8 @@ using namespace llvm;
 
 namespace polly {
 
-void findLoopTreeRepresentation(Loop *L, LoopInfo &LI, ScalarEvolution &SE);
+std::vector<Loop *> getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
+                                       DominatorTree &DT);
 
 struct TriangularLoopFixPass final : PassInfoMixin<TriangularLoopFixPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

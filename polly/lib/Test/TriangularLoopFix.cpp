@@ -66,27 +66,6 @@ Loop *getOutermostLoop(Loop *L) {
   return Outermost;
 }
 
-std::vector<Loop *> getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
-                                       DominatorTree &DT) {
-  std::vector<Loop *> TriangularLoops;
-  for (Loop *L : LI.getLoopsInPreorder()) {
-    PHINode *IndVar = getInductionVariable(L, SE, DT, LI);
-    if (!IndVar) {
-      continue;
-    }
-
-    Loop *OuterLoop = getOutermostLoop(L);
-    const SCEV *BackedgeCount = SE.getBackedgeTakenCount(L);
-
-    if (isa<SCEVCouldNotCompute>(BackedgeCount))
-      continue;
-
-    if (not SE.isLoopInvariant(BackedgeCount, OuterLoop))
-      TriangularLoops.push_back(L);
-  }
-  return TriangularLoops;
-}
-
 int64_t getEmptyInnerLoopIterations(const SCEV *Bound, ScalarEvolution &SE) {
   // 1. On vérifie que c'est bien une AddRecurrence (Triangulaire)
   auto *AddRec = dyn_cast<SCEVAddRecExpr>(Bound);
@@ -283,6 +262,27 @@ void transformTriangularLoops(Loop *L, int64_t EmptyIterations, LoopInfo &LI,
 
 } // namespace
 
+std::vector<Loop *> polly::getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
+                                              DominatorTree &DT) {
+  std::vector<Loop *> TriangularLoops;
+  for (Loop *L : LI.getLoopsInPreorder()) {
+    PHINode *IndVar = getInductionVariable(L, SE, DT, LI);
+    if (!IndVar) {
+      continue;
+    }
+
+    Loop *OuterLoop = getOutermostLoop(L);
+    const SCEV *BackedgeCount = SE.getBackedgeTakenCount(L);
+
+    if (isa<SCEVCouldNotCompute>(BackedgeCount))
+      continue;
+
+    if (not SE.isLoopInvariant(BackedgeCount, OuterLoop))
+      TriangularLoops.push_back(L);
+  }
+  return TriangularLoops;
+}
+
 PreservedAnalyses TriangularLoopFixPass::run(Function &F,
                                              FunctionAnalysisManager &AM) {
   if (not F.hasFnAttribute("polly.findSCoP"))
@@ -293,13 +293,6 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
 
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  for (auto *L : LI.getLoopsInPreorder())
-    errs() << "LCSSA de " << L->getHeader()->getName() << "   "
-           << L->isRecursivelyLCSSAForm(DT, LI) << "\n";
-
-  if (verifyFunction(F, &errs())) {
-    report_fatal_error("IR verification failed.");
-  }
 
   ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
 
@@ -307,6 +300,11 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
   for (auto *L : TriangularLoops) {
     errs() << "Boucle triangulaire detectee: \n"
            << L->getHeader()->getName() << "\n";
+  }
+
+  if (TriangularLoops.empty()) {
+    LLVM_DEBUG(errs() << "TriangularLoopFixPass pass done\n";);
+    return PreservedAnalyses::none();
   }
 
   auto Map = mapTriangularLoopToOuterIV(TriangularLoops, LI, SE, DT);
@@ -318,17 +316,6 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
     Loop *OuterLoop = getOutermostLoop(Entry.first);
     transformTriangularLoops(OuterLoop, Entry.second, LI, SE, DT, AC);
   }
-
-  //
-  //
-
-  // auto LoopToModified = findTriangularLoops(LI, SE, DT);
-
-  // if (not LoopToModified.first) {
-  //   LLVM_DEBUG(errs() << "\tAucune boucle triangulaire detectee.\n";);
-  //   return PreservedAnalyses::all();
-  // }
-  // transformTriangularLoops(LoopToModified, LI, SE, DT, AC);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
