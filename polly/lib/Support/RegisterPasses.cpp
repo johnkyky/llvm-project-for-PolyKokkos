@@ -63,7 +63,9 @@
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/ConstraintElimination.h"
 #include "llvm/Transforms/Scalar/DCE.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 
@@ -329,6 +331,9 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(CodePreparationPass());
   PM.addPass(ExtractAnnotatedFromLoop());
   PM.addPass(UserAssumptions());
+  PM.addPass(SimplifyCFGPass());
+  PM.addPass(ConstraintEliminationPass());
+  PM.addPass(createFunctionToLoopPassAdaptor(IndVarSimplifyPass()));
   PM.addPass(SimplifyCFGPass());
 
   PM.addPass(RemoveLoopVersioningPass());
