@@ -21,9 +21,12 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include <cstdint>
 #include <utility>
 
 #define DEBUG_TYPE "polly-triangular-loop-fix"
@@ -33,11 +36,20 @@ using namespace polly;
 
 namespace {
 
-PHINode *getInductionVariable(Loop *L, ScalarEvolution &SE) {
-  if (PHINode *IndVar = L->getCanonicalInductionVariable())
+PHINode *getInductionVariable(Loop *L, ScalarEvolution &SE, DominatorTree &DT,
+                              LoopInfo &LI) {
+  if (PHINode *IndVar = L->getCanonicalInductionVariable()) {
     return IndVar;
+  }
 
   for (PHINode &PN : L->getHeader()->phis()) {
+    if (not L->getLoopPreheader()) {
+      BasicBlock *Pred = L->getLoopPredecessor();
+      BasicBlock *Succ = L->getHeader();
+      SplitEdge(Pred, Succ, &DT, &LI);
+      SE.forgetLoop(L);
+    }
+
     InductionDescriptor D;
     if (InductionDescriptor::isInductionPHI(&PN, L, &SE, D)) {
       return &PN;
@@ -54,10 +66,11 @@ Loop *getOutermostLoop(Loop *L) {
   return Outermost;
 }
 
-std::vector<Loop *> getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE) {
+std::vector<Loop *> getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
+                                       DominatorTree &DT) {
   std::vector<Loop *> TriangularLoops;
   for (Loop *L : LI.getLoopsInPreorder()) {
-    PHINode *IndVar = getInductionVariable(L, SE);
+    PHINode *IndVar = getInductionVariable(L, SE, DT, LI);
     if (!IndVar) {
       continue;
     }
@@ -74,8 +87,69 @@ std::vector<Loop *> getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE) {
   return TriangularLoops;
 }
 
-std::pair<Loop *, size_t> findTriangularLoops(LoopInfo &LI,
-                                              ScalarEvolution &SE) {
+int64_t getEmptyInnerLoopIterations(const SCEV *Bound, ScalarEvolution &SE) {
+  // 1. On vérifie que c'est bien une AddRecurrence (Triangulaire)
+  auto *AddRec = dyn_cast<SCEVAddRecExpr>(Bound);
+  if (!AddRec)
+    return 0;
+
+  // 2. On suppose que c'est une expression affine simple (constantes)
+  auto *StartC = dyn_cast<SCEVConstant>(AddRec->getStart());
+  auto *StepC = dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+
+  if (!StartC || !StepC)
+    return 0; // Trop complexe si ce n'est pas constant
+
+  int64_t Start = StartC->getValue()->getSExtValue();
+  int64_t Step = StepC->getValue()->getSExtValue();
+
+  // Si le démarrage est déjà positif, la boucle existe dès le début.
+  if (Start >= 0)
+    return 0;
+
+  // Si le pas est négatif ou nul, la boucle ne deviendra jamais positive (cas
+  // dégénéré)
+  if (Step <= 0)
+    return -1; // Ou gérer comme erreur
+
+  // 3. Résolution de l'équation : Start + i * Step < 0
+  // On cherche combien d'itérations 'i' donnent un résultat négatif.
+  // Formule : ceil(abs(Start) / Step)
+
+  // Utilisation de l'arithmétique entière pour faire le ceil : (Num + Denom -
+  // 1) / Denom
+  int64_t AbsStart = std::abs(Start);
+  int64_t SkippedIterations = (AbsStart + Step - 1) / Step;
+
+  return SkippedIterations;
+}
+
+DenseMap<Loop *, int64_t>
+mapTriangularLoopToOuterIV(std::vector<Loop *> TriangularLoops, LoopInfo &LI,
+                           ScalarEvolution &SE, DominatorTree &DT) {
+  DenseMap<Loop *, int64_t> Map;
+
+  for (auto *L : TriangularLoops) {
+    const SCEV *Bound = SE.getBackedgeTakenCount(L);
+    errs() << "Bound " << *Bound << "\n";
+
+    Loop *OuterLoop = getOutermostLoop(L);
+
+    if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(Bound)) {
+      if (AR->getLoop() == OuterLoop) {
+        int64_t SkipedIters = getEmptyInnerLoopIterations(Bound, SE);
+        Map.insert({L, SkipedIters});
+      } else
+        llvm_unreachable("AddRecExpr loop is not the outer loop ?");
+    } else
+      llvm_unreachable("Bound is not an AddRecExpr ?");
+  }
+
+  return Map;
+}
+
+std::pair<Loop *, size_t> findTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
+                                              DominatorTree &DT) {
   SmallVector<std::pair<Loop *, size_t>, 2> TriangularLoops;
   for (Loop *L : LI) {
     if (L->getSubLoops().empty()) {
@@ -83,7 +157,7 @@ std::pair<Loop *, size_t> findTriangularLoops(LoopInfo &LI,
       continue;
     }
 
-    PHINode *IndVar = getInductionVariable(L, SE);
+    PHINode *IndVar = getInductionVariable(L, SE, DT, LI);
     if (!IndVar) {
       errs() << "\tPas de variable d'induction, on passe.\n";
       continue;
@@ -171,19 +245,18 @@ std::pair<Loop *, size_t> findTriangularLoops(LoopInfo &LI,
   return TriangularLoops[0];
 }
 
-void transformTriangularLoops(std::pair<Loop *, size_t> &LoopToModified,
-                              LoopInfo &LI, ScalarEvolution &SE,
-                              DominatorTree &DT, AssumptionCache &AC) {
-  Loop *L = LoopToModified.first;
-  size_t EmptyIterations = LoopToModified.second;
-  LLVM_DEBUG(errs() << "\tModification de la boucle " << *L << " pour skippper "
+void transformTriangularLoops(Loop *L, int64_t EmptyIterations, LoopInfo &LI,
+                              ScalarEvolution &SE, DominatorTree &DT,
+                              AssumptionCache &AC) {
+  LLVM_DEBUG(errs() << "\tModification de la boucle "
+                    << L->getHeader()->getName() << " pour skippper "
                     << EmptyIterations << " itérations vides.\n";);
 
   if (not L->isLoopSimplifyForm()) {
     errs() << "on force la simplification de la boucle " << L->getName()
            << "\n";
 
-    bool Simplified = simplifyLoop(L, &DT, &LI, &SE, &AC, nullptr, true);
+    bool Simplified = simplifyLoop(L, &DT, &LI, &SE, &AC, nullptr, false);
 
     if (!Simplified) {
       errs() << "Impossible de simplifier la boucle " << L->getName() << "\n";
@@ -199,7 +272,13 @@ void transformTriangularLoops(std::pair<Loop *, size_t> &LoopToModified,
   errs() << "Peeling possible sur la boucle " << L->getName() << "\n";
 
   ValueToValueMapTy VMap;
-  peelLoop(L, EmptyIterations, &LI, &SE, DT, &AC, true, VMap);
+  bool IsDone = peelLoop(L, EmptyIterations, &LI, &SE, DT, &AC, false, VMap);
+
+  if (not IsDone) {
+    errs() << "Peeling échoué sur la boucle " << L->getName() << "\n";
+  } else {
+    errs() << "Peeling réussi sur la boucle " << L->getName() << "\n";
+  }
 }
 
 } // namespace
@@ -212,25 +291,44 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
   LLVM_DEBUG(errs() << "TriangularLoopFixPass pass run on " << F.getName()
                     << "\n";);
 
-  // errs() << "\ncaca\n";
-  // for (auto *L : getTriangularLoops(AM.getResult<LoopAnalysis>(F),
-  //                                   AM.getResult<ScalarEvolutionAnalysis>(F)))
-  //                                   {
-  //   errs() << "Boucle triangulaire detectee: \n" << *L << "\n";
-  // }
-  // errs() << "pipi\n\n";
-
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-  ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-  auto LoopToModified = findTriangularLoops(LI, SE);
-
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  auto &AC = AM.getResult<AssumptionAnalysis>(F);
-  if (not LoopToModified.first) {
-    LLVM_DEBUG(errs() << "\tAucune boucle triangulaire detectee.\n";);
-    return PreservedAnalyses::all();
+  for (auto *L : LI.getLoopsInPreorder())
+    errs() << "LCSSA de " << L->getHeader()->getName() << "   "
+           << L->isRecursivelyLCSSAForm(DT, LI) << "\n";
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error("IR verification failed.");
   }
-  transformTriangularLoops(LoopToModified, LI, SE, DT, AC);
+
+  ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+
+  auto TriangularLoops = getTriangularLoops(LI, SE, DT);
+  for (auto *L : TriangularLoops) {
+    errs() << "Boucle triangulaire detectee: \n"
+           << L->getHeader()->getName() << "\n";
+  }
+
+  auto Map = mapTriangularLoopToOuterIV(TriangularLoops, LI, SE, DT);
+
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  for (auto &Entry : Map) {
+    errs() << "Boucle: " << *Entry.first
+           << " -> Iterations vides: " << Entry.second << "\n";
+    Loop *OuterLoop = getOutermostLoop(Entry.first);
+    transformTriangularLoops(OuterLoop, Entry.second, LI, SE, DT, AC);
+  }
+
+  //
+  //
+
+  // auto LoopToModified = findTriangularLoops(LI, SE, DT);
+
+  // if (not LoopToModified.first) {
+  //   LLVM_DEBUG(errs() << "\tAucune boucle triangulaire detectee.\n";);
+  //   return PreservedAnalyses::all();
+  // }
+  // transformTriangularLoops(LoopToModified, LI, SE, DT, AC);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
@@ -239,68 +337,4 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
   LLVM_DEBUG(errs() << "TriangularLoopFixPass pass done\n";);
 
   return PreservedAnalyses::none();
-}
-
-namespace {
-struct LoopCondition {
-  Instruction *CondInst;
-  Value *LHS;
-  Value *RHS;
-  CmpInst::Predicate Pred;
-};
-
-struct LoopConditionInfo {
-  Loop *L;
-  LoopCondition Lower;
-  LoopCondition Upper;
-
-  LoopConditionInfo(Loop *Loop, LoopCondition LCond, LoopCondition UCond)
-      : L(Loop), Lower(LCond), Upper(UCond) {}
-};
-
-LoopCondition getLoopLowerBoundConditions() {
-  LoopCondition LC;
-  return LC;
-}
-
-LoopCondition getLoopUpperBoundConditions() {
-  LoopCondition LC;
-  return LC;
-}
-} // namespace
-
-void polly::findLoopTreeRepresentation(Loop *L, LoopInfo &LI,
-                                       ScalarEvolution &SE) {
-  if (not L) {
-    return;
-  }
-
-  if (L->getParentLoop() != nullptr) {
-    return;
-  }
-
-  DenseMap<Loop *, LoopConditionInfo> LoopConditionsInfo;
-  std::vector<Loop *> WorkList;
-  WorkList.push_back(L);
-  while (not WorkList.empty()) {
-    Loop *CurrentLoop = WorkList.back();
-    WorkList.pop_back();
-
-    if (CurrentLoop->getSubLoops().empty())
-      continue;
-
-    BasicBlock *Header = CurrentLoop->getHeader();
-    if (std::distance(succ_begin(Header), succ_end(Header)) == 2) {
-      // normal case
-      continue;
-    }
-
-    for (Loop *SubL : CurrentLoop->getSubLoops()) {
-      WorkList.push_back(SubL);
-    }
-  }
-
-  //
-
-  return;
 }
