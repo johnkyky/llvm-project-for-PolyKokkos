@@ -380,12 +380,57 @@ std::vector<Comparison> parseAssumptions(
   return ComparaisonVec;
 }
 
-Instruction *findDominatingInstruction(Instruction *A, Instruction *B,
-                                       DominatorTree &DT) {
+bool collectDependenciesToHoist(Instruction *I, BasicBlock *TargetBlock,
+                                DominatorTree &DT,
+                                SetVector<Instruction *> &ToHoist) {
+  if (ToHoist.count(I))
+    return true;
+
+  for (Value *Op : I->operands()) {
+    Instruction *OpInst = dyn_cast<Instruction>(Op);
+    if (!OpInst)
+      continue;
+
+    if (DT.dominates(OpInst->getParent(), TargetBlock))
+      continue;
+
+    if (OpInst->getParent() == I->getParent()) {
+      if (!collectDependenciesToHoist(OpInst, TargetBlock, DT, ToHoist))
+        return false;
+    } else {
+      return false;
+    }
+  }
+  ToHoist.insert(I);
+  return true;
+}
+
+Instruction *findDominatingOrHoistChain(Instruction *A, Instruction *B,
+                                        DominatorTree &DT) {
   if (DT.dominates(A, B))
     return A;
   if (DT.dominates(B, A))
     return B;
+
+  BasicBlock *CommonBB =
+      DT.findNearestCommonDominator(A->getParent(), B->getParent());
+  Instruction *InsertionPoint = CommonBB->getTerminator();
+
+  SetVector<Instruction *> InstructionsToMove;
+
+  if (collectDependenciesToHoist(A, CommonBB, DT, InstructionsToMove)) {
+
+    for (Instruction *Inst : InstructionsToMove) {
+      errs() << "  Hoisting: " << *Inst << "\n";
+    }
+
+    for (Instruction *Inst : InstructionsToMove) {
+      Inst->moveBefore(InsertionPoint);
+    }
+
+    return A;
+  }
+
   llvm_unreachable("No dominating instruction found between the two.");
 }
 
@@ -528,8 +573,7 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
 
   switch (C.Op) {
   case Comparison::Operator::EQUAL: {
-
-    Instruction *Replacer = findDominatingInstruction(LHSInst, RHSInst, DT);
+    Instruction *Replacer = findDominatingOrHoistChain(LHSInst, RHSInst, DT);
     Instruction *Replaced = (Replacer == LHSInst) ? RHSInst : LHSInst;
     LLVM_DEBUG(errs() << "Replacing " << *Replaced << " with " << *Replacer
                       << "\n");
@@ -603,8 +647,8 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
       Pred = CmpInst::Predicate::ICMP_SGE;
 
     Instruction *InsertLoc =
-        findDominatingInstruction(LHSInst, RHSInst, DT) == LHSInst ? RHSInst
-                                                                   : LHSInst;
+        findDominatingOrHoistChain(LHSInst, RHSInst, DT) == LHSInst ? RHSInst
+                                                                    : LHSInst;
     Builder.SetInsertPoint(InsertLoc->getNextNode());
     Value *Cmp = Builder.CreateICmp(Pred, LHSInst, RHSInst);
     Value *Assumption = Builder.CreateAssumption(Cmp);
