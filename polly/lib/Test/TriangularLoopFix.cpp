@@ -11,10 +11,10 @@
 
 #include "polly/Test/TriangularLoopFix.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
@@ -66,47 +66,79 @@ Loop *getOutermostLoop(Loop *L) {
   return Outermost;
 }
 
-int64_t getEmptyInnerLoopIterations(const SCEV *Bound, ScalarEvolution &SE) {
-  // 1. On vérifie que c'est bien une AddRecurrence (Triangulaire)
-  auto *AddRec = dyn_cast<SCEVAddRecExpr>(Bound);
-  if (!AddRec)
+enum class PeelDirection { NONE, FRONT, BACK };
+
+struct PeelResult {
+  const SCEV *Count;
+  PeelDirection Direction;
+  int64_t getIntValue() const {
+    if (auto *ConstCount = dyn_cast<SCEVConstant>(Count)) {
+      return ConstCount->getValue()->getSExtValue();
+    }
     return 0;
+  }
+};
 
-  // 2. On suppose que c'est une expression affine simple (constantes)
-  auto *StartC = dyn_cast<SCEVConstant>(AddRec->getStart());
-  auto *StepC = dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+const PeelResult computeDuration(ScalarEvolution &SE,
+                                 const SCEVAddRecExpr *AddRec) {
+  if (not AddRec->isAffine()) {
+    return {SE.getCouldNotCompute(), PeelDirection::NONE};
+  }
 
-  if (!StartC || !StepC)
-    return 0; // Trop complexe si ce n'est pas constant
+  const SCEV *Start = AddRec->getStart();
+  const SCEV *Step = AddRec->getStepRecurrence(SE);
 
-  int64_t Start = StartC->getValue()->getSExtValue();
-  int64_t Step = StepC->getValue()->getSExtValue();
+  const SCEVConstant *StepConst = dyn_cast<SCEVConstant>(Step);
+  if (not StepConst)
+    return {SE.getCouldNotCompute(), PeelDirection::NONE};
 
-  // Si le démarrage est déjà positif, la boucle existe dès le début.
-  if (Start >= 0)
-    return 0;
+  APInt StepVal = StepConst->getAPInt();
 
-  // Si le pas est négatif ou nul, la boucle ne deviendra jamais positive (cas
-  // dégénéré)
-  if (Step <= 0)
-    return -1; // Ou gérer comme erreur
+  const SCEV *Zero = SE.getZero(Start->getType());
+  const SCEV *One = SE.getOne(Start->getType());
 
-  // 3. Résolution de l'équation : Start + i * Step < 0
-  // On cherche combien d'itérations 'i' donnent un résultat négatif.
-  // Formule : ceil(abs(Start) / Step)
+  if (StepVal.isStrictlyPositive()) {
+    if (SE.isKnownNonNegative(Start))
+      return {Zero, PeelDirection::NONE};
 
-  // Utilisation de l'arithmétique entière pour faire le ceil : (Num + Denom -
-  // 1) / Denom
-  int64_t AbsStart = std::abs(Start);
-  int64_t SkippedIterations = (AbsStart + Step - 1) / Step;
+    // Formule : ceil( (-Start) / Step )
+    // En arithmétique entière : ( (-Start) + Step - 1 ) / Step
 
-  return SkippedIterations;
+    const SCEV *NegStart = SE.getNegativeSCEV(Start);
+    const SCEV *StepMinusOne = SE.getMinusSCEV(Step, One);
+    const SCEV *Numerator = SE.getAddExpr(NegStart, StepMinusOne);
+
+    return {SE.getUDivExpr(Numerator, Step), PeelDirection::FRONT};
+  }
+
+  if (StepVal.isNegative()) {
+    if (SE.isKnownNonPositive(Start))
+      return {Zero, PeelDirection::BACK};
+
+    // Formule : ceil( Start / (-Step) )
+    // Soit AbsStep = -Step
+    // En arithmétique entière : (Start + AbsStep - 1) / AbsStep
+
+    const SCEV *AbsStep = SE.getNegativeSCEV(Step); // Car Step est négatif
+    const SCEV *AbsStepMinusOne = SE.getMinusSCEV(AbsStep, One);
+    const SCEV *Numerator = SE.getAddExpr(Start, AbsStepMinusOne);
+
+    const auto *Div = SE.getUDivExpr(Numerator, AbsStep);
+
+    const auto *L = AddRec->getLoop();
+    const auto *BTC = SE.getBackedgeTakenCount(L);
+
+    auto *Res = SE.getAbsExpr(SE.getMinusSCEV(BTC, Div), false);
+    return {Res, PeelDirection::BACK};
+  }
+
+  return {SE.getCouldNotCompute(), PeelDirection::NONE};
 }
 
-DenseMap<Loop *, int64_t>
+DenseMap<Loop *, PeelResult>
 mapTriangularLoopToOuterIV(std::vector<Loop *> TriangularLoops, LoopInfo &LI,
                            ScalarEvolution &SE, DominatorTree &DT) {
-  DenseMap<Loop *, int64_t> Map;
+  DenseMap<Loop *, PeelResult> Map;
 
   for (auto *L : TriangularLoops) {
     const SCEV *Bound = SE.getBackedgeTakenCount(L);
@@ -116,8 +148,8 @@ mapTriangularLoopToOuterIV(std::vector<Loop *> TriangularLoops, LoopInfo &LI,
 
     if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(Bound)) {
       if (AR->getLoop() == OuterLoop) {
-        int64_t SkipedIters = getEmptyInnerLoopIterations(Bound, SE);
-        Map.insert({L, SkipedIters});
+        auto PeelRes = computeDuration(SE, AR);
+        Map.insert({L, PeelRes});
       } else
         llvm_unreachable("AddRecExpr loop is not the outer loop ?");
     } else
@@ -127,109 +159,12 @@ mapTriangularLoopToOuterIV(std::vector<Loop *> TriangularLoops, LoopInfo &LI,
   return Map;
 }
 
-std::pair<Loop *, size_t> findTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
-                                              DominatorTree &DT) {
-  SmallVector<std::pair<Loop *, size_t>, 2> TriangularLoops;
-  for (Loop *L : LI) {
-    if (L->getSubLoops().empty()) {
-      errs() << "\n\tLoop sans sous-boucle, on passe.\n";
-      continue;
-    }
-
-    PHINode *IndVar = getInductionVariable(L, SE, DT, LI);
-    if (!IndVar) {
-      errs() << "\tPas de variable d'induction, on passe.\n";
-      continue;
-    }
-
-    errs() << "getBackedgeTakenCount pour la boucle "
-           << *SE.getBackedgeTakenCount(L) << "\n";
-
-    for (Loop *SubL : L->getSubLoops()) {
-      size_t EmptyIterations = 0;
-      errs() << "\tAnalyse de la boucle interne " << *SubL << "\n";
-      const SCEV *BackedgeCount = SE.getBackedgeTakenCount(SubL);
-      errs() << "\tBackedge count de la boucle " << *SubL << " : "
-             << *BackedgeCount << "\n";
-
-      if (isa<SCEVCouldNotCompute>(BackedgeCount)) {
-        errs() << "\tBackedge count non calculable, on "
-                  "passe.\n";
-        continue;
-      }
-
-      if (SE.isLoopInvariant(BackedgeCount, L)) {
-        errs() << "\tBackedge count invariant on passe.\n";
-        continue;
-      }
-
-      if (auto *AddRect = dyn_cast<SCEVAddRecExpr>(BackedgeCount)) {
-        if (AddRect->getLoop() == L and AddRect->isAffine()) {
-          errs() << "\tBackedge count affine detecte: " << *AddRect << "\n";
-
-          const SCEV *StartSCEV = AddRect->getStart();
-          const SCEV *StepSCEV = AddRect->getStepRecurrence(SE);
-          if (auto *StartConst = dyn_cast<SCEVConstant>(StartSCEV)) {
-            if (auto *StepConst = dyn_cast<SCEVConstant>(StepSCEV)) {
-              APInt StartVal = StartConst->getAPInt();
-              APInt StepVal = StepConst->getAPInt();
-
-              if (StepVal.isStrictlyPositive()) {
-                // Si Start == 0 (Cas j < i) -> 1 itération vide (i=0)
-                if (StartVal.isZero()) {
-                  errs() << "Iteration 0 est vide (1 itération a skipper).\n";
-                  EmptyIterations = 1;
-                  // return 1;
-                }
-                // Si Start > 0 (Cas j < i+1) -> Aucune itération vide
-                else if (StartVal.isStrictlyPositive()) {
-                  errs() << "Aucune itération vide au début.\n";
-                  // return 0;
-                }
-                // Si Start < 0 (Cas j < i - K) -> Plusieurs itérations vides
-                else {
-                  // Formule : Ceil(abs(Start) / Step)
-                  // En arithmétique entière : (abs(Start) + Step - 1) / Step
-                  APInt AbsStart = StartVal.abs();
-                  APInt EmptyCount = (AbsStart + StepVal - 1).udiv(StepVal);
-
-                  // Attention, on ajoute +1 car l'itération "0" compte aussi si
-                  // on traverse l'axe Mais généralement si Start = -2 et Step =
-                  // 1 : i=0 -> -2 (Vide) i=1 -> -1 (Vide) i=2 -> 0 (Vide ou 1er
-                  // passage selon sémantique LT/LE) Souvent BackedgeCount est
-                  // le nombre de tours, donc si SCEV <= 0, tours = 0.
-
-                  errs() << "Iterations vides: " << EmptyCount << "\n";
-                  EmptyIterations = EmptyCount.getZExtValue();
-                }
-              }
-            }
-          }
-        }
-      }
-      if (not EmptyIterations) {
-        errs() << "\tBackedge count non triangulaire, on "
-                  "passe.\n";
-        continue;
-      }
-
-      TriangularLoops.push_back({L, EmptyIterations});
-      errs() << "\tBoucle triangulaire detectee ! " << *L << "\n";
-    }
-  }
-
-  if (TriangularLoops.empty()) {
-    return {nullptr, 0};
-  }
-  return TriangularLoops[0];
-}
-
-void transformTriangularLoops(Loop *L, int64_t EmptyIterations, LoopInfo &LI,
+void transformTriangularLoops(Loop *L, PeelResult PeelRes, LoopInfo &LI,
                               ScalarEvolution &SE, DominatorTree &DT,
                               AssumptionCache &AC) {
   LLVM_DEBUG(errs() << "\tModification de la boucle "
                     << L->getHeader()->getName() << " pour skippper "
-                    << EmptyIterations << " itérations vides.\n";);
+                    << PeelRes.getIntValue() << " itérations vides.\n";);
 
   if (not L->isLoopSimplifyForm()) {
     errs() << "on force la simplification de la boucle " << L->getName()
@@ -251,7 +186,14 @@ void transformTriangularLoops(Loop *L, int64_t EmptyIterations, LoopInfo &LI,
   errs() << "Peeling possible sur la boucle " << L->getName() << "\n";
 
   ValueToValueMapTy VMap;
-  bool IsDone = peelLoop(L, EmptyIterations, &LI, &SE, DT, &AC, false, VMap);
+  bool IsDone = false;
+
+  if (PeelRes.Direction == PeelDirection::FRONT)
+    IsDone = peelLoop(L, PeelRes.getIntValue(), &LI, &SE, DT, &AC, false, VMap);
+  else if (PeelRes.Direction == PeelDirection::BACK) {
+    llvm_unreachable("Not implemented yet");
+    // IsDone = peelLoop(L, PeelRes.getIntValue(), &LI, &SE, DT, &AC, VMap);
+  }
 
   if (not IsDone) {
     errs() << "Peeling échoué sur la boucle " << L->getName() << "\n";
@@ -310,11 +252,14 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
   auto Map = mapTriangularLoopToOuterIV(TriangularLoops, LI, SE, DT);
 
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
-  for (auto &Entry : Map) {
-    errs() << "Boucle: " << *Entry.first
-           << " -> Iterations vides: " << Entry.second << "\n";
-    Loop *OuterLoop = getOutermostLoop(Entry.first);
-    transformTriangularLoops(OuterLoop, Entry.second, LI, SE, DT, AC);
+  for (auto &[L, PeelRes] : Map) {
+    errs() << "Boucle: " << *L
+           << " -> Iterations vides: " << PeelRes.getIntValue() << "\n";
+    if (PeelRes.getIntValue() == 0)
+      continue;
+
+    Loop *OuterLoop = getOutermostLoop(L);
+    transformTriangularLoops(OuterLoop, PeelRes, LI, SE, DT, AC);
   }
 
   if (verifyFunction(F, &errs())) {
