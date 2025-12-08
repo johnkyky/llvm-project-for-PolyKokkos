@@ -224,8 +224,30 @@ void removeLoopBoundConditions(Function &F,
   return;
 }
 
+Value *getBooleanValue(ICmpInst *ICmp) {
+  ICmpInst::Predicate Pred = ICmp->getPredicate();
+
+  int ZeroOpIndex = 0;
+  if (isa<ConstantInt>(ICmp->getOperand(1)))
+    ZeroOpIndex = 1;
+
+  switch (Pred) {
+  case ICmpInst::ICMP_SGT: {
+    if (ZeroOpIndex == 0)
+      llvm_unreachable("Something's wrong with loop bound condition");
+    return ConstantInt::getTrue(ICmp->getContext());
+  }
+  default:
+    llvm_unreachable("Unsupported loop bound condition");
+    break;
+  }
+
+  return ConstantInt::getFalse(ICmp->getContext());
+}
+
 void removeLoopBoundVarConditions(Function &F) {
   // useful with the annotation of loop bounds inside parallel_for
+  SmallSetVector<std::pair<CallInst *, ICmpInst *>, 2> ToChange;
   for (auto &BB : F) {
     for (auto It = BB.begin(); It != BB.end();) {
       Instruction *I = &*It;
@@ -236,7 +258,8 @@ void removeLoopBoundVarConditions(Function &F) {
           continue;
         if (Callee->getName().starts_with("llvm.annotation")) {
           for (User *U : CallInst->users()) {
-            if (Instruction *ICmp = dyn_cast<ICmpInst>(U)) {
+            if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
+              ToChange.insert({CallInst, ICmp});
               bool IsConstantZero = false;
               for (auto &Op : ICmp->operands()) {
                 if (Op == CallInst)
@@ -251,13 +274,24 @@ void removeLoopBoundVarConditions(Function &F) {
 
               LLVM_DEBUG(errs() << "Removing loop bound variable condition "
                                 << *ICmp << "\n";);
-              Value *FalseVal = ConstantInt::getFalse(ICmp->getContext());
-              ICmp->replaceAllUsesWith(FalseVal);
+              Value *BooleanVal = getBooleanValue(ICmp);
+              ICmp->replaceAllUsesWith(BooleanVal);
             }
           }
         }
       }
     }
+  }
+
+  for (auto &[CallInst, ICmp] : ToChange) {
+    auto *Val = CallInst->getArgOperand(0);
+    ICmp->replaceUsesOfWith(CallInst, Val);
+
+    auto Builder = IRBuilder<>(ICmp->getNextNode());
+    Value *Assumption = Builder.CreateAssumption(ICmp);
+    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+    LLVM_DEBUG(errs() << "remove var annotation condition : " << *CallInst
+                      << "   " << *ICmp << "\n";);
   }
 }
 
