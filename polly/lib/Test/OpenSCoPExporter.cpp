@@ -179,7 +179,22 @@ unsigned extractDimValue(ISLType &ISLObjet, isl::dim Dim) {
   return unsignedFromIslSize(ISLNbParams);
 }
 
-osl_relation_p convertContext(isl::set ISLContext) {
+osl_relation_p convertContext(isl::set ISLContext, Scop &S) {
+  errs() << ISLContext << "\n";
+  isl::basic_set_list BasicSetList = ISLContext.get_basic_set_list();
+  std::vector<std::vector<long long>> Matrix;
+  BasicSetList.foreach ([&](isl::basic_set BasicSet) -> isl::stat {
+    isl_basic_set *BasicSetC = BasicSet.copy();
+    isl_basic_set_foreach_constraint(BasicSetC, &readSetConstraints, &Matrix);
+    isl_basic_set_free(BasicSetC);
+
+    return isl::stat::ok();
+  });
+
+  for (auto &Array : S.arrays()) {
+    errs() << "array " << Array->getSpace() << "\n";
+  }
+
   unsigned NbParams = extractDimValue(ISLContext, isl::dim::param);
   osl_relation_p OSLContext = osl_relation_malloc(0, 2 + NbParams);
   OSLContext->type = OSL_TYPE_CONTEXT;
@@ -188,6 +203,20 @@ osl_relation_p convertContext(isl::set ISLContext) {
   OSLContext->nb_input_dims = 0;
   OSLContext->nb_local_dims = 0;
   OSLContext->nb_parameters = NbParams;
+
+  const auto Min = static_cast<long long>(std::numeric_limits<int>::min());
+  const auto Max = static_cast<long long>(std::numeric_limits<int>::max());
+
+  for (size_t I = 0; I < Matrix.size(); ++I) {
+    for (size_t J = 0; J < Matrix[I].size(); ++J) {
+      errs() << "I " << I << "  J " << J << "    ->   " << Matrix[I][J] << "\n";
+
+      long long Val = Matrix[I][J];
+      int ConvertedVal = static_cast<int>(std::clamp(Val, Min, Max));
+
+      // osl_int_set_si(OSL_PRECISION_DP, OSLContext->m[I] + J, ConvertedVal);
+    }
+  }
 
   return OSLContext;
 }
@@ -673,7 +702,7 @@ void OpenSCoPExportPass::exportOpenScop(Scop &S, std::string FileName) {
   // Context
   auto Context = S.getDefinedBehaviorContext();
 
-  osl_relation_p OSLContext = convertContext(Context);
+  osl_relation_p OSLContext = convertContext(Context, S);
   OSLScop->context = OSLContext;
 
   // Parameters
