@@ -245,7 +245,7 @@ Value *getBooleanValue(ICmpInst *ICmp) {
   return ConstantInt::getFalse(ICmp->getContext());
 }
 
-void removeLoopBoundVarConditions(Function &F) {
+void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
   // useful with the annotation of loop bounds inside parallel_for
   SmallSetVector<std::pair<CallInst *, ICmpInst *>, 2> ToChange;
   for (auto &BB : F) {
@@ -285,11 +285,22 @@ void removeLoopBoundVarConditions(Function &F) {
 
   for (auto &[CallInst, ICmp] : ToChange) {
     auto *Val = CallInst->getArgOperand(0);
-    ICmp->replaceUsesOfWith(CallInst, Val);
+    CallInst->replaceAllUsesWith(Val);
 
-    auto Builder = IRBuilder<>(ICmp->getNextNode());
+    auto *ValInst = dyn_cast_or_null<Instruction>(Val);
+    if (not ValInst)
+      llvm_unreachable("Expected instruction");
+    auto Builder = IRBuilder<>(ValInst->getNextNode());
     Value *Assumption = Builder.CreateAssumption(ICmp);
     LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
+
+    auto *AssumptionInst = dyn_cast_or_null<Instruction>(Assumption);
+    auto *AssumptionCall = dyn_cast_or_null<llvm::AssumeInst>(AssumptionInst);
+    if (not AssumptionInst or not AssumptionCall)
+      llvm_unreachable("Expected assume instruction");
+    AC.registerAssumption(AssumptionCall);
+    ICmp->moveBefore(AssumptionInst);
+
     LLVM_DEBUG(errs() << "remove var annotation condition : " << *CallInst
                       << "   " << *ICmp << "\n";);
   }
@@ -308,7 +319,8 @@ RemoveLoopBoundConditionPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
   LLVM_DEBUG(errs() << LBA << "\n";);
   removeLoopBoundConditions(F, LBA);
-  removeLoopBoundVarConditions(F);
+  auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  removeLoopBoundVarConditions(F, AC);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
