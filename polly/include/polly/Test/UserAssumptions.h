@@ -9,11 +9,15 @@
 #ifndef POLLY_USERASSUMPTIONS_H
 #define POLLY_USERASSUMPTIONS_H
 
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
 
 using namespace llvm;
 
 namespace polly {
+
+bool hoistInstructionChain(Instruction *I, BasicBlock *TargetBlock,
+                           DominatorTree &DT);
 
 struct UserAssumptions final : PassInfoMixin<UserAssumptions> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);

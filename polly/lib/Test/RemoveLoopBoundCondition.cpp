@@ -12,17 +12,20 @@
 #include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/ScopDetectionDiagnostic.h"
 #include "polly/Test/LoopFusion.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Use.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -85,6 +88,7 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Value *LeftOpVal,
     break;
   }
   default:
+    errs() << "bute\n";
     llvm_unreachable("Unsupported loop bound condition");
     break;
   }
@@ -232,12 +236,16 @@ Value *getBooleanValue(ICmpInst *ICmp) {
     ZeroOpIndex = 1;
 
   switch (Pred) {
+  case ICmpInst::ICMP_EQ: {
+    return ConstantInt::getFalse(ICmp->getContext());
+  }
   case ICmpInst::ICMP_SGT: {
     if (ZeroOpIndex == 0)
       llvm_unreachable("Something's wrong with loop bound condition");
     return ConstantInt::getTrue(ICmp->getContext());
   }
   default:
+    errs() << "buteee\n";
     llvm_unreachable("Unsupported loop bound condition");
     break;
   }
@@ -246,8 +254,40 @@ Value *getBooleanValue(ICmpInst *ICmp) {
 }
 
 void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
+  struct HoistedData {
+    CallInst *Call;
+    BinaryOperator *Operation;
+    ICmpInst *ICmp;
+  };
+
+  auto Lambda = [&](ICmpInst *ICmp, CallInst *CallInst, BinaryOperator *BinOp,
+                    SmallVectorImpl<HoistedData> &ToChangee) {
+    bool HasConstant = false;
+    for (auto &Op : ICmp->operands()) {
+      Instruction *Tmp = BinOp ? dyn_cast<Instruction>(BinOp)
+                               : dyn_cast<Instruction>(CallInst);
+      if (Op == Tmp)
+        continue;
+      if (isa<ConstantInt>(Op)) {
+        HasConstant = true;
+      }
+    }
+    if (not HasConstant)
+      return;
+
+    Value *BooleanVal2 = getBooleanValue(ICmp);
+    ICmp->replaceAllUsesWith(BooleanVal2);
+    // if boolean val is false, we need to invert the predicate
+    if (isa<ConstantInt>(BooleanVal2) &&
+        cast<ConstantInt>(BooleanVal2)->isZero())
+      ICmp->setPredicate(ICmp->getInversePredicate());
+    ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp});
+    LLVM_DEBUG(errs() << "Removing loop bound variable condition " << *ICmp
+                      << "\n";);
+  };
+
   // useful with the annotation of loop bounds inside parallel_for
-  SmallSetVector<std::pair<CallInst *, ICmpInst *>, 2> ToChange;
+  SmallVector<HoistedData, 2> ToChangee;
   for (auto &BB : F) {
     for (auto It = BB.begin(); It != BB.end();) {
       Instruction *I = &*It;
@@ -259,23 +299,23 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
         if (Callee->getName().starts_with("llvm.annotation")) {
           for (User *U : CallInst->users()) {
             if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
-              ToChange.insert({CallInst, ICmp});
-              bool IsConstantZero = false;
-              for (auto &Op : ICmp->operands()) {
-                if (Op == CallInst)
-                  continue;
-                if (auto *ConstOp = dyn_cast<ConstantInt>(Op)) {
-                  if (ConstOp->isZero())
-                    IsConstantZero = true;
-                }
+              Lambda(ICmp, CallInst, nullptr, ToChangee);
+            } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
+              errs() << "Binary operator found: " << *BinOp << "\n";
+              // find the constant
+              unsigned ConstantIndex = 2;
+              for (unsigned I = 0; I < 2; ++I) {
+                if (isa<ConstantInt>(BinOp->getOperand(I)))
+                  ConstantIndex = I;
               }
-              if (not IsConstantZero)
+              if (ConstantIndex == 2)
                 continue;
 
-              LLVM_DEBUG(errs() << "Removing loop bound variable condition "
-                                << *ICmp << "\n";);
-              Value *BooleanVal = getBooleanValue(ICmp);
-              ICmp->replaceAllUsesWith(BooleanVal);
+              for (auto *UserOfBinOp : BinOp->users()) {
+                if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
+                  Lambda(ICmp, CallInst, BinOp, ToChangee);
+                }
+              }
             }
           }
         }
@@ -283,26 +323,44 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
     }
   }
 
-  for (auto &[CallInst, ICmp] : ToChange) {
+  for (auto &[CallInst, BinaryOp, ICmp] : ToChangee) {
+    // replace the annotation value with the original value
     auto *Val = CallInst->getArgOperand(0);
     CallInst->replaceAllUsesWith(Val);
 
     auto *ValInst = dyn_cast_or_null<Instruction>(Val);
     if (not ValInst)
       llvm_unreachable("Expected instruction");
-    auto Builder = IRBuilder<>(ValInst->getNextNode());
-    Value *Assumption = Builder.CreateAssumption(ICmp);
-    LLVM_DEBUG(errs() << "Registering assumption: " << *Assumption << "\n");
 
+    // Clone the instruction comparing
+    auto *NewICmp = ICmp->clone();
+    NewICmp->setName("var_loop_bound_icmp");
+    NewICmp->insertAfter(ValInst->getNextNode());
+
+    // Assumption creation and insertion
+    auto Builder = IRBuilder<>(NewICmp->getNextNode());
+    Value *Assumption = Builder.CreateAssumption(NewICmp);
     auto *AssumptionInst = dyn_cast_or_null<Instruction>(Assumption);
     auto *AssumptionCall = dyn_cast_or_null<llvm::AssumeInst>(AssumptionInst);
     if (not AssumptionInst or not AssumptionCall)
       llvm_unreachable("Expected assume instruction");
     AC.registerAssumption(AssumptionCall);
-    ICmp->moveBefore(AssumptionInst);
 
-    LLVM_DEBUG(errs() << "remove var annotation condition : " << *CallInst
-                      << "   " << *ICmp << "\n";);
+    // if BianryOp is not null, we need to clone it
+    if (BinaryOp) {
+      auto *NewBinaryOp = BinaryOp->clone();
+      NewBinaryOp->setName("var_loop_bound_binop");
+      NewBinaryOp->insertBefore(NewICmp);
+      unsigned ConstantIndex = 2;
+      for (unsigned I = 0; I < 2; ++I) {
+        if (isa<ConstantInt>(BinaryOp->getOperand(I)))
+          ConstantIndex = I;
+      }
+      NewICmp->setOperand(1 - ConstantIndex, NewBinaryOp);
+    }
+
+    LLVM_DEBUG(errs() << "Registering assumption: " << *NewICmp << "  "
+                      << *Assumption << "\n");
   }
 }
 
