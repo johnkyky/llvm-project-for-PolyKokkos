@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/VarFusion.h"
+#include "polly/Test/UserAssumptions.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Dominators.h"
@@ -53,7 +54,37 @@ void fusionVarAnnotations(Function &F, DominatorTree &DT) {
       return DT.dominates(A->getParent(), B->getParent());
     });
 
+    // if no valid dominating order we move the first instruction to the common
     Instruction *FirstInst = Insts[0];
+    bool IsValid = true;
+    for (size_t I = 1; I < Insts.size(); I++) {
+      Instruction *Inst = Insts[I];
+      if (FirstInst->getParent() == Inst->getParent()) {
+        IsValid &= FirstInst->comesBefore(Inst);
+      } else {
+        IsValid &= DT.dominates(FirstInst->getParent(), Inst->getParent());
+      }
+    }
+    if (not IsValid) {
+      errs() << "Cannot merge variable " << Name
+             << " : instructions are not in a dominating order\n";
+      BasicBlock *FirstInstBlock = FirstInst->getParent();
+      BasicBlock *CommonDom = FirstInstBlock;
+
+      for (size_t I = 1; I < Insts.size(); I++) {
+        Instruction *Inst = Insts[I];
+        BasicBlock *BB = Inst->getParent();
+        CommonDom = DT.findNearestCommonDominator(CommonDom, BB);
+
+        if (!CommonDom ||
+            CommonDom == &FirstInstBlock->getParent()->getEntryBlock())
+          break;
+      }
+      errs() << "  Common dominator block: "
+             << (CommonDom ? CommonDom->getName() : "null") << "\n";
+      if (not hoistInstructionChain(FirstInst, CommonDom, DT))
+        llvm_unreachable("Cannot hoist instruction to common dominator");
+    }
 
     for (size_t I = 1; I < Insts.size(); I++) {
       Instruction *CurrInst = Insts[I];

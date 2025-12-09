@@ -405,6 +405,22 @@ bool collectDependenciesToHoist(Instruction *I, BasicBlock *TargetBlock,
   return true;
 }
 
+bool hoistInstructionChain(Instruction *I, BasicBlock *TargetBlock,
+                           DominatorTree &DT) {
+  SetVector<Instruction *> InstructionsToMove;
+  Instruction *InsertionPoint = TargetBlock->getTerminator()->getPrevNode();
+  if (collectDependenciesToHoist(I, TargetBlock, DT, InstructionsToMove)) {
+    for (Instruction *Inst : InstructionsToMove) {
+      errs() << "  Hoisting: " << *Inst << "\n";
+    }
+    for (Instruction *Inst : InstructionsToMove) {
+      Inst->moveBefore(InsertionPoint);
+    }
+    return true;
+  }
+  return false;
+}
+
 Instruction *findDominatingOrHoistChain(Instruction *A, Instruction *B,
                                         DominatorTree &DT) {
   if (DT.dominates(A, B))
@@ -414,22 +430,9 @@ Instruction *findDominatingOrHoistChain(Instruction *A, Instruction *B,
 
   BasicBlock *CommonBB =
       DT.findNearestCommonDominator(A->getParent(), B->getParent());
-  Instruction *InsertionPoint = CommonBB->getTerminator()->getPrevNode();
 
-  SetVector<Instruction *> InstructionsToMove;
-
-  if (collectDependenciesToHoist(A, CommonBB, DT, InstructionsToMove)) {
-
-    for (Instruction *Inst : InstructionsToMove) {
-      errs() << "  Hoisting: " << *Inst << "\n";
-    }
-
-    for (Instruction *Inst : InstructionsToMove) {
-      Inst->moveBefore(InsertionPoint);
-    }
-
+  if (hoistInstructionChain(A, CommonBB, DT))
     return A;
-  }
 
   llvm_unreachable("No dominating instruction found between the two.");
 }
@@ -706,6 +709,22 @@ void applyAssumptions(Function &F, std::vector<Comparison> &Assumptions,
 }
 
 } // namespace
+
+bool polly::hoistInstructionChain(Instruction *I, BasicBlock *TargetBlock,
+                                  DominatorTree &DT) {
+  SetVector<Instruction *> InstructionsToMove;
+  Instruction *InsertionPoint = TargetBlock->getTerminator()->getPrevNode();
+  if (collectDependenciesToHoist(I, TargetBlock, DT, InstructionsToMove)) {
+    for (Instruction *Inst : InstructionsToMove) {
+      errs() << "  Hoisting: " << *Inst << "\n";
+    }
+    for (Instruction *Inst : InstructionsToMove) {
+      Inst->moveBefore(InsertionPoint);
+    }
+    return true;
+  }
+  return false;
+}
 
 PreservedAnalyses UserAssumptions::run(Function &F,
                                        FunctionAnalysisManager &AM) {
