@@ -414,7 +414,7 @@ Instruction *findDominatingOrHoistChain(Instruction *A, Instruction *B,
 
   BasicBlock *CommonBB =
       DT.findNearestCommonDominator(A->getParent(), B->getParent());
-  Instruction *InsertionPoint = CommonBB->getTerminator();
+  Instruction *InsertionPoint = CommonBB->getTerminator()->getPrevNode();
 
   SetVector<Instruction *> InstructionsToMove;
 
