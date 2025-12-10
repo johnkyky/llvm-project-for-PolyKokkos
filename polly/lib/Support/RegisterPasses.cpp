@@ -66,8 +66,8 @@
 #include "llvm/Transforms/Scalar/ConstraintElimination.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
 
 namespace cl = llvm::cl;
 
@@ -328,8 +328,10 @@ static bool shouldEnablePollyForDiagnostic() {
 static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
+  PM.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
   PM.addPass(CodePreparationPass());
   PM.addPass(ExtractAnnotatedFromLoop());
+  PM.addPass(VarFusionPass());
   PM.addPass(UserAssumptions());
   PM.addPass(SimplifyCFGPass());
   PM.addPass(ConstraintEliminationPass());
@@ -340,10 +342,6 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(SimplifyCFGPass());
 
   PM.addPass(RemoveLoopBoundConditionPass());
-  PM.addPass(InstCombinePass());
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(VarFusionPass());
   PM.addPass(InstCombinePass());
   PM.addPass(SimplifyCFGPass());
 
