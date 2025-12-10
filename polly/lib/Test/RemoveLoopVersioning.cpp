@@ -11,9 +11,11 @@
 
 #include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/ScopDetectionDiagnostic.h"
+#include "polly/Test/TriangularLoopFix.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
@@ -26,6 +28,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <iterator>
 
 #define DEBUG_TYPE "polly-remove-loop-versioning"
 
@@ -55,7 +58,7 @@ bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
   }
 
   for (auto &UserInst : InstructionToTest) {
-    // errs() << "User instruction: " << *UserInst << "\n";
+    errs() << "User instruction: " << *UserInst << "\n";
     if (not UserInst)
       continue;
 
@@ -71,8 +74,8 @@ bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
       if (BI->isConditional() && BI->getCondition() == CmpInst) {
         if (Loop->isLoopExiting(CmpBlock)) {
           return true;
-          // errs() << "  [FOUND] Cette instruction est une condition "
-          //        << "de sortie de boucle !\n";
+          errs() << "  [FOUND] Cette instruction est une condition "
+                 << "de sortie de boucle !\n";
           break;
         }
       }
@@ -81,62 +84,205 @@ bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
   return false;
 }
 
-void removeUnswitchedBranches(Function &F, LoopInfo &LI) {
-  for (BasicBlock &BB : F) {
-    // errs() << "\n\nVisiting block: " << BB.getName() << "\n";
+BasicBlock *getMergeBlock(BasicBlock *SplitBlock, PostDominatorTree &PDT) {
+  DomTreeNode *Node = PDT.getNode(SplitBlock);
 
-    if (LI.getLoopFor(&BB)) {
-      // errs() << "Skipping block inside a loop\n";
+  if (Node and Node->getIDom()) {
+    return Node->getIDom()->getBlock(); // C'est C
+  }
+
+  return nullptr;
+}
+
+unsigned getMaxDepthRecursive(Loop *L) {
+  unsigned CurrentDepth = L->getLoopDepth();
+  unsigned MaxDepth = CurrentDepth;
+
+  for (Loop *SubLoop : L->getSubLoops()) {
+    unsigned SubDepth = getMaxDepthRecursive(SubLoop);
+    MaxDepth = std::max(MaxDepth, SubDepth);
+  }
+
+  return MaxDepth;
+}
+
+std::vector<Loop *> getAllSubLoops(Loop *L) {
+  std::vector<Loop *> SubLoops;
+  for (Loop *SubLoop : L->getSubLoops()) {
+    SubLoops.push_back(SubLoop);
+    auto NestedSubLoops = getAllSubLoops(SubLoop);
+    SubLoops.insert(SubLoops.end(), NestedSubLoops.begin(),
+                    NestedSubLoops.end());
+  }
+  return SubLoops;
+}
+
+Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
+  Instruction *Terminator = Fision->getTerminator();
+  if (!Terminator)
+    return nullptr;
+
+  errs() << "\tgetVersionedLoop visiting terminator: " << *Terminator << "\n";
+
+  Loop *BaseLoop = LI.getLoopFor(Fision);
+  unsigned BaseDepth = BaseLoop ? BaseLoop->getLoopDepth() : 0;
+  errs() << "\tBase loop " << BaseDepth << " : "
+         << (BaseLoop ? BaseLoop->getName() : "null") << "\n";
+
+  unsigned NumSucc = Terminator->getNumSuccessors();
+  for (unsigned I = 0; I < NumSucc; ++I) {
+    BasicBlock *Succ = Terminator->getSuccessor(I);
+    if (Succ == Fusion)
       continue;
+
+    errs() << "\tChecking successor: " << Succ->getName() << "\n";
+
+    while (LI.getLoopFor(Succ) == BaseLoop) {
+      Succ = Succ->getSingleSuccessor();
+      if (!Succ) {
+        llvm_unreachable("No single successor found ?");
+      }
+      errs() << "\tFollowing to successor: " << Succ->getName() << "\n";
     }
+
+    Loop *SuccLoop = LI.getLoopFor(Succ);
+
+    errs() << "\t\tSuccessor loop: "
+           << (SuccLoop ? SuccLoop->getName() : "null") << "\n";
+
+    if (SuccLoop) {
+      unsigned SuccDepth = getMaxDepthRecursive(SuccLoop);
+      errs() << "\t\tSuccessor loop depth: " << SuccDepth << "\n";
+
+      if (SuccDepth > BaseDepth + 1) {
+        return SuccLoop;
+      }
+    } else
+      llvm_unreachable("Successeur sans boucle ?");
+  }
+
+  // Aucune boucle plus profonde trouvée
+  return nullptr;
+}
+
+bool isValidBranchInst(Instruction *Inst, LoopInfo &LI) {
+  BranchInst *Branch = dyn_cast<BranchInst>(Inst);
+  if (not Branch)
+    return false;
+  if (!Branch->isConditional() || Branch->getNumSuccessors() != 2) {
+    errs() << "Skipping non-conditional or non-binary branch\n";
+    return false;
+  }
+  Value *Condition = Branch->getCondition();
+  if (auto *ICmp = dyn_cast<ICmpInst>(Condition)) {
+    Value *LHS = ICmp->getOperand(0);
+    Value *RHS = ICmp->getOperand(1);
+    ICmpInst::Predicate Pred = ICmp->getPredicate();
+    errs() << "LHS: " << *LHS << "\n";
+    errs() << "RHS: " << *RHS << "\n";
+    errs() << "Predicate: " << Pred << "\n";
+
+    ConstantInt *ConstOp = nullptr;
+    Value *VariableOp = nullptr;
+
+    if ((ConstOp = dyn_cast<ConstantInt>(RHS))) {
+      VariableOp = LHS;
+    } else if ((ConstOp = dyn_cast<ConstantInt>(LHS))) {
+      VariableOp = RHS;
+    }
+
+    if (not VariableOp or not ConstOp) {
+      errs() << "No constant operand found, skipping\n";
+      return false;
+    }
+
+    if (not isLoopBoundCondition(VariableOp, LI)) {
+      errs() << "Variable operand is not from a loop bound, skipping\n";
+      return false;
+    }
+  }
+  return true;
+}
+
+void removeUnswitchedBranches(Function &F, LoopInfo &LI, PostDominatorTree &PDT,
+                              DominatorTree &DT, ScalarEvolution &SE) {
+  for (BasicBlock &BB : F) {
+    errs() << "\n\nVisiting block: " << BB.getName() << "\n";
 
     // check if block have itself in its successors (loop backedge)
     if (std::find(succ_begin(&BB), succ_end(&BB), &BB) != succ_end(&BB)) {
-      // errs() << "Skipping block with self-loop\n";
+      errs() << "Skipping block with self-loop\n";
       continue;
     }
 
     Instruction *Term = BB.getTerminator();
-    // errs() << "Terminator: " << *Term << "\n";
+    if (not isValidBranchInst(Term, LI))
+      continue;
 
-    if (BranchInst *Branch = dyn_cast<BranchInst>(Term)) {
-      if (!Branch->isConditional() || Branch->getNumSuccessors() != 2) {
-        // errs() << "Skipping non-conditional or non-binary branch\n";
+    auto TriangularLoops = getTriangularLoops(LI, SE, DT);
+    if (auto *L = LI.getLoopFor(&BB)) {
+      errs() << "BB is inside a loop: " << L->getName() << "\n";
+
+      auto *EndVersioningBB = getMergeBlock(&BB, PDT);
+      errs() << "EndVersioningBB: "
+             << (EndVersioningBB ? EndVersioningBB->getName() : "null") << "\n";
+
+      if (not EndVersioningBB) {
+        errs() << "No merge block found, skipping\n";
         continue;
       }
+
+      Loop *VersionedLoop = getVersionedLoop(&BB, EndVersioningBB, LI);
+      if (not VersionedLoop) {
+        errs() << "No versioned loop found, skipping\n";
+        continue;
+      }
+
+      errs() << "Versioned loop: " << VersionedLoop->getName() << "\n ";
+      auto SubLoops = getAllSubLoops(VersionedLoop);
+      SubLoops.push_back(VersionedLoop);
+      for (auto *SubL : SubLoops) {
+        errs() << "\tSubLoop: " << SubL->getName() << "\n";
+      }
+
+      bool IsVariantInAllSubLoops = false;
+      for (auto *SubL : SubLoops) {
+        const SCEV *SubBackedgeCount = SE.getBackedgeTakenCount(SubL);
+        errs() << "\tSubLoop Backedge SCEV: " << *SubBackedgeCount << "\n";
+        if (SE.isLoopInvariant(SubBackedgeCount, L)) {
+          errs() << "\tBackedge count invariant pour " << SubL->getName()
+                 << "\n";
+        } else {
+          errs() << "\tBackedge count variant pour " << SubL->getName() << "\n";
+          IsVariantInAllSubLoops = true;
+        }
+      }
+
+      if (IsVariantInAllSubLoops) {
+        errs() << "\tBackedge count variant on passe.\n";
+        continue;
+      }
+
+      errs() << "Loop Invariant -> on la traite\n";
+    }
+
+    errs() << "Terminator: " << *Term << "\n";
+
+    if (BranchInst *Branch = dyn_cast<BranchInst>(Term)) {
       Value *Condition = Branch->getCondition();
       if (auto *ICmp = dyn_cast<ICmpInst>(Condition)) {
         Value *LHS = ICmp->getOperand(0);
         Value *RHS = ICmp->getOperand(1);
         ICmpInst::Predicate Pred = ICmp->getPredicate();
-        // errs() << "Removing unswitched branch: " << *ICmp << "\n";
-        // errs() << "LHS: " << *LHS << "\n";
-        // errs() << "RHS: " << *RHS << "\n";
-        // errs() << "Predicate: " << Pred << "\n";
-
-        ConstantInt *ConstOp = nullptr;
-        Value *VariableOp = nullptr;
-
-        if ((ConstOp = dyn_cast<ConstantInt>(RHS))) {
-          VariableOp = LHS;
-        } else if ((ConstOp = dyn_cast<ConstantInt>(LHS))) {
-          VariableOp = RHS;
-        }
-
-        if (not VariableOp or not ConstOp) {
-          // errs() << "No constant operand found, skipping\n";
-          continue;
-        }
-
-        if (not isLoopBoundCondition(VariableOp, LI)) {
-          // errs() << "Variable operand is not from a loop bound, skipping\n";
-          continue;
-        }
+        errs() << "Removing unswitched branch: " << *ICmp << "\n";
+        errs() << "LHS: " << *LHS << "\n";
+        errs() << "RHS: " << *RHS << "\n";
+        errs() << "Predicate: " << Pred << "\n";
 
         switch (Pred) {
         case ICmpInst::ICMP_EQ: {
-          // errs() << "on sup Branch " << *Branch << "\n";
-          // errs() << "on branch to " << *Branch->getSuccessor(1) << "\n";
+          errs() << "on sup Branch " << *Branch << "\n";
+          errs() << "on branch to " << *Branch->getSuccessor(1) << "\n";
           BasicBlock *ParentBlock = Branch->getParent();
           BasicBlock *NextBB = Branch->getSuccessor(1);
           BasicBlock *RemovedBlock = Branch->getSuccessor(0);
@@ -180,7 +326,10 @@ PreservedAnalyses RemoveLoopVersioningPass::run(Function &F,
                     << "\n";);
 
   LoopInfo &LI = AM.getResult<LoopAnalysis>(F);
-  removeUnswitchedBranches(F, LI);
+  PostDominatorTree &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  DominatorTree &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  removeUnswitchedBranches(F, LI, PDT, DT, SE);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
