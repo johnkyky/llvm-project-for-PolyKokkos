@@ -28,7 +28,6 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include <iterator>
 
 #define DEBUG_TYPE "polly-remove-loop-versioning"
 
@@ -37,8 +36,38 @@ using namespace polly;
 
 namespace {
 
-bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
+bool isLoopBoundCondition(Value *Val, LoopInfo &LI, DominatorTree &DT,
+                          PostDominatorTree &PDT) {
+  auto *ValInst = dyn_cast<Instruction>(Val);
+  auto *FissionBlock = ValInst->getParent();
+  Instruction *Term = FissionBlock->getTerminator();
+  BasicBlock *Succ0 = Term->getSuccessor(0);
+  BasicBlock *Succ1 = Term->getSuccessor(1);
+  BasicBlock *FusionBlock = PDT.findNearestCommonDominator(Succ0, Succ1);
+
+  if (Succ0 == FusionBlock || Succ1 == FusionBlock) {
+    errs() << "Fusion block is one of the successors, skipping\n";
+    return false;
+  }
+
   llvm::SmallVector<Instruction *, 4> InstructionToTest;
+
+  if (auto *CallInst = dyn_cast<llvm::CallInst>(Val)) {
+    const Function *Callee = CallInst->getCalledFunction();
+    if (Callee and Callee->getName().starts_with("llvm.annotation")) {
+      auto *Val = CallInst->getArgOperand(0);
+      for (User *U : Val->users()) {
+        InstructionToTest.push_back(dyn_cast<Instruction>(U));
+        for (auto *UU : U->users()) {
+          Instruction *UserUserBinOp = dyn_cast<ICmpInst>(UU);
+          if (not UserUserBinOp)
+            continue;
+          InstructionToTest.push_back(UserUserBinOp);
+        }
+      }
+    }
+  }
+
   for (auto &U : Val->uses()) {
     Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
     if (not UserInst)
@@ -57,9 +86,21 @@ bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
     }
   }
 
+  auto IsBetweenBlocks = [&](BasicBlock *BB) {
+    if (BB == FissionBlock || BB == FusionBlock)
+      return true;
+
+    bool DominatedByStart = DT.dominates(FissionBlock, BB);
+    bool PostDominatedByEnd = PDT.dominates(FusionBlock, BB);
+    return DominatedByStart && PostDominatedByEnd;
+  };
+
   for (auto &UserInst : InstructionToTest) {
     errs() << "User instruction: " << *UserInst << "\n";
     if (not UserInst)
+      continue;
+
+    if (not IsBetweenBlocks(UserInst->getParent()))
       continue;
 
     ICmpInst *CmpInst = dyn_cast<ICmpInst>(UserInst);
@@ -73,10 +114,9 @@ bool isLoopBoundCondition(Value *Val, LoopInfo &LI) {
     if (BranchInst *BI = dyn_cast<BranchInst>(CmpBlock->getTerminator())) {
       if (BI->isConditional() && BI->getCondition() == CmpInst) {
         if (Loop->isLoopExiting(CmpBlock)) {
-          return true;
           errs() << "  [FOUND] Cette instruction est une condition "
                  << "de sortie de boucle !\n";
-          break;
+          return true;
         }
       }
     }
@@ -88,7 +128,7 @@ BasicBlock *getMergeBlock(BasicBlock *SplitBlock, PostDominatorTree &PDT) {
   DomTreeNode *Node = PDT.getNode(SplitBlock);
 
   if (Node and Node->getIDom()) {
-    return Node->getIDom()->getBlock(); // C'est C
+    return Node->getIDom()->getBlock();
   }
 
   return nullptr;
@@ -137,13 +177,21 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
 
     errs() << "\tChecking successor: " << Succ->getName() << "\n";
 
+    bool BreakLoop = false;
     while (LI.getLoopFor(Succ) == BaseLoop) {
       Succ = Succ->getSingleSuccessor();
+      if (Succ == Fusion) {
+        errs() << "\t\tReached fusion block, stopping\n";
+        BreakLoop = true;
+        break;
+      }
       if (!Succ) {
         llvm_unreachable("No single successor found ?");
       }
       errs() << "\tFollowing to successor: " << Succ->getName() << "\n";
     }
+    if (BreakLoop)
+      continue;
 
     Loop *SuccLoop = LI.getLoopFor(Succ);
 
@@ -154,7 +202,7 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
       unsigned SuccDepth = getMaxDepthRecursive(SuccLoop);
       errs() << "\t\tSuccessor loop depth: " << SuccDepth << "\n";
 
-      if (SuccDepth > BaseDepth + 1) {
+      if (SuccDepth > BaseDepth) {
         return SuccLoop;
       }
     } else
@@ -165,7 +213,8 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
   return nullptr;
 }
 
-bool isValidBranchInst(Instruction *Inst, LoopInfo &LI) {
+bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
+                       PostDominatorTree &PDT) {
   BranchInst *Branch = dyn_cast<BranchInst>(Inst);
   if (not Branch)
     return false;
@@ -196,7 +245,7 @@ bool isValidBranchInst(Instruction *Inst, LoopInfo &LI) {
       return false;
     }
 
-    if (not isLoopBoundCondition(VariableOp, LI)) {
+    if (not isLoopBoundCondition(VariableOp, LI, DT, PDT)) {
       errs() << "Variable operand is not from a loop bound, skipping\n";
       return false;
     }
@@ -216,7 +265,7 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI, PostDominatorTree &PDT,
     }
 
     Instruction *Term = BB.getTerminator();
-    if (not isValidBranchInst(Term, LI))
+    if (not isValidBranchInst(Term, LI, DT, PDT))
       continue;
 
     auto TriangularLoops = getTriangularLoops(LI, SE, DT);
