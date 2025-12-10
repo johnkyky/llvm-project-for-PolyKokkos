@@ -237,16 +237,17 @@ Value *getBooleanValue(ICmpInst *ICmp) {
 
   switch (Pred) {
   case ICmpInst::ICMP_EQ: {
+    ICmp->setPredicate(ICmp->getInversePredicate());
     return ConstantInt::getFalse(ICmp->getContext());
   }
+  case ICmpInst::ICMP_ULT:
   case ICmpInst::ICMP_SGT: {
     if (ZeroOpIndex == 0)
       llvm_unreachable("Something's wrong with loop bound condition");
     return ConstantInt::getTrue(ICmp->getContext());
   }
   default:
-    errs() << "buteee\n";
-    llvm_unreachable("Unsupported loop bound condition");
+    llvm_unreachable("Unsupported loop bound condition in getBooleanValue");
     break;
   }
 
@@ -277,10 +278,6 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
 
     Value *BooleanVal2 = getBooleanValue(ICmp);
     ICmp->replaceAllUsesWith(BooleanVal2);
-    // if boolean val is false, we need to invert the predicate
-    if (isa<ConstantInt>(BooleanVal2) &&
-        cast<ConstantInt>(BooleanVal2)->isZero())
-      ICmp->setPredicate(ICmp->getInversePredicate());
     ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp});
     LLVM_DEBUG(errs() << "Removing loop bound variable condition " << *ICmp
                       << "\n";);
@@ -333,7 +330,8 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
       llvm_unreachable("Expected instruction");
 
     // Clone the instruction comparing
-    auto *NewICmp = ICmp->clone();
+    auto *NewICmpInst = ICmp->clone();
+    auto *NewICmp = dyn_cast_or_null<ICmpInst>(NewICmpInst);
     NewICmp->setName("var_loop_bound_icmp");
     NewICmp->insertAfter(ValInst->getNextNode());
 
@@ -351,12 +349,16 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
       auto *NewBinaryOp = BinaryOp->clone();
       NewBinaryOp->setName("var_loop_bound_binop");
       NewBinaryOp->insertBefore(NewICmp);
-      unsigned ConstantIndex = 2;
+
+      unsigned ConstantIndexCmp = 2;
       for (unsigned I = 0; I < 2; ++I) {
-        if (isa<ConstantInt>(BinaryOp->getOperand(I)))
-          ConstantIndex = I;
+        if (isa<ConstantInt>(NewICmp->getOperand(I)))
+          ConstantIndexCmp = I;
       }
-      NewICmp->setOperand(1 - ConstantIndex, NewBinaryOp);
+
+      errs() << "binary op: " << *BinaryOp << "\n";
+
+      NewICmp->setOperand(1 - ConstantIndexCmp, NewBinaryOp);
     }
 
     LLVM_DEBUG(errs() << "Registering assumption: " << *NewICmp << "  "

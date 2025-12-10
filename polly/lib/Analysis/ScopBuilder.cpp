@@ -379,13 +379,35 @@ __isl_give isl_set *ScopBuilder::buildUnsignedConditionSets(
   isl_pw_aff *TestVal = getPwAff(BB, InvalidDomainMap, SCEV_TestVal, false);
   // Take NonNeg assumption on UpperBound.
   isl_pw_aff *UpperBound =
-      getPwAff(BB, InvalidDomainMap, SCEV_UpperBound, true);
+      getPwAff(BB, InvalidDomainMap, SCEV_UpperBound, false);
+
+  if (auto *ICmp = dyn_cast<ICmpInst>(Condition)) {
+    isl_val *MinVal = isl_pw_aff_min_val(isl_pw_aff_copy(UpperBound));
+
+    if (ICmp->isUnsigned() and isl_val_is_neg(MinVal) and
+        isl_pw_aff_is_cst(UpperBound)) {
+      isl_ctx *Ctx = scop->getIslCtx().get();
+
+      isl_val *ISLVal64 = isl_val_int_from_si(Ctx, 64);
+      isl_val *ModVal = isl_val_2exp(ISLVal64);
+
+      isl_pw_aff *UnsignedUpperBound =
+          isl_pw_aff_mod_val(isl_pw_aff_copy(UpperBound), ModVal);
+
+      isl_pw_aff_free(UpperBound);
+      UpperBound = UnsignedUpperBound;
+    }
+    isl_val_free(MinVal);
+  }
 
   // 0 <= TestVal
   isl_set *First =
       isl_pw_aff_le_set(isl_pw_aff_zero_on_domain(isl_local_space_from_space(
                             isl_pw_aff_get_domain_space(TestVal))),
                         isl_pw_aff_copy(TestVal));
+
+  errs() << "  First condition set (0 <= TestVal): " << isl::manage_copy(First)
+         << "\n";
 
   isl_set *Second;
   if (IsStrictUpperBound)
@@ -395,6 +417,9 @@ __isl_give isl_set *ScopBuilder::buildUnsignedConditionSets(
     // TestVal <= UpperBound
     Second = isl_pw_aff_le_set(TestVal, UpperBound);
 
+  errs() << "  second condition set (TestVal "
+         << (IsStrictUpperBound ? "<" : "<=")
+         << " UpperBound): " << isl::manage_copy(Second) << "\n";
   isl_set *ConsequenceCondSet = isl_set_intersect(First, Second);
   return ConsequenceCondSet;
 }
@@ -1427,7 +1452,7 @@ void ScopBuilder::addUserAssumptions(
     auto *CI = dyn_cast_or_null<CallInst>(Assumption);
     if (!CI || CI->arg_size() != 1)
       continue;
-    errs() << "Processing user assumption: " << *Assumption << "\n";
+    errs() << "\nProcessing user assumption: " << *Assumption << "\n";
 
     bool InScop = scop->contains(CI);
     if (!InScop && !scop->isDominatedBy(DT, CI->getParent()))
@@ -1435,6 +1460,7 @@ void ScopBuilder::addUserAssumptions(
 
     auto *L = LI.getLoopFor(CI->getParent());
     auto *Val = CI->getArgOperand(0);
+    errs() << "  Assumed value: " << *Val << "\n";
     ParameterSetTy DetectedParams;
     auto &R = scop->getRegion();
     if (!isAffineConstraint(Val, &R, L, SE, DetectedParams)) {
@@ -1466,6 +1492,9 @@ void ScopBuilder::addUserAssumptions(
 
     if (!Valid)
       continue;
+
+    for (auto *Set : ConditionSets)
+      errs() << "Condition set: " << isl::manage_copy(Set) << "\n";
 
     isl_set *AssumptionCtx = nullptr;
     if (InScop) {
