@@ -99,6 +99,24 @@ void SCEVAffinator::takeNonNegativeAssumption(
     PWACtx &PWAC, RecordedAssumptionsTy *RecordedAssumptions) {
   this->RecordedAssumptions = RecordedAssumptions;
 
+  isl_pw_aff *PWACCopy = PWAC.first.copy();
+  if (PWACCopy) {
+    isl_val *MinVal = isl_pw_aff_min_val(isl_pw_aff_copy(PWACCopy));
+    if (isl_pw_aff_is_cst(PWACCopy) and isl_val_is_neg(MinVal)) {
+      isl_ctx *Ctx = PWAC.first.ctx().get();
+
+      isl_val *ISLVal64 = isl_val_int_from_si(Ctx, 64);
+      isl_val *ModVal = isl_val_2exp(ISLVal64);
+
+      isl_pw_aff *UnsignedUpperBound =
+          isl_pw_aff_mod_val(isl_pw_aff_copy(PWACCopy), ModVal);
+
+      PWAC.first = isl::manage(UnsignedUpperBound);
+    }
+    isl_val_free(MinVal);
+  }
+  isl_pw_aff_free(PWACCopy);
+
   auto *NegPWA = isl_pw_aff_neg(PWAC.first.copy());
   auto *NegDom = isl_pw_aff_pos_set(NegPWA);
   PWAC.second =

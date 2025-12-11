@@ -379,7 +379,7 @@ __isl_give isl_set *ScopBuilder::buildUnsignedConditionSets(
   isl_pw_aff *TestVal = getPwAff(BB, InvalidDomainMap, SCEV_TestVal, false);
   // Take NonNeg assumption on UpperBound.
   isl_pw_aff *UpperBound =
-      getPwAff(BB, InvalidDomainMap, SCEV_UpperBound, false);
+      getPwAff(BB, InvalidDomainMap, SCEV_UpperBound, true);
 
   if (auto *ICmp = dyn_cast<ICmpInst>(Condition)) {
     isl_val *MinVal = isl_pw_aff_min_val(isl_pw_aff_copy(UpperBound));
@@ -468,6 +468,7 @@ bool ScopBuilder::buildConditionSets(
     SmallVectorImpl<__isl_give isl_set *> &ConditionSets) {
   isl_set *ConsequenceCondSet = nullptr;
 
+  errs() << "Building condition set for condition: " << *Condition << "\n";
   if (auto Load = dyn_cast<LoadInst>(Condition)) {
     const SCEV *LHSSCEV = SE.getSCEVAtScope(Load, L);
     const SCEV *RHSSCEV = SE.getZero(LHSSCEV->getType());
@@ -1411,9 +1412,10 @@ void ScopBuilder::buildEscapingDependences(Instruction *Inst) {
 
 void ScopBuilder::addRecordedAssumptions() {
   for (auto &AS : llvm::reverse(RecordedAssumptions)) {
-    errs() << "Invalid Context " << scop->getInvalidContext() << "\n";
-    errs() << "Adding recorded assumption: " << AS.Set << " kind = " << AS.Kind
-           << " sign = " << AS.Sign << "\n";
+    errs() << "Adding recorded assumption: " << AS.Set
+           << " kind = " << assumptionKindToOS(AS.Kind)
+           << " sign = " << assumptionSignToOS(AS.Sign) << " " << AS.RequiresRTC
+           << "\n";
 
     if (!AS.BB) {
       scop->addAssumption(AS.Kind, AS.Set, AS.Loc, AS.Sign,
@@ -1435,14 +1437,18 @@ void ScopBuilder::addRecordedAssumptions() {
     //
     // To avoid the complement we will register A - B as a restriction not an
     // assumption.
+    errs() << "  Domain of BB " << isl::manage_copy(Dom) << "\n";
     isl_set *S = AS.Set.copy();
     if (AS.Sign == AS_RESTRICTION)
       S = isl_set_params(isl_set_intersect(S, Dom));
     else /* (AS.Sign == AS_ASSUMPTION) */
       S = isl_set_params(isl_set_subtract(Dom, S));
 
+    errs() << "  Simplified assumption set: " << isl::manage_copy(S) << "\n";
     scop->addAssumption(AS.Kind, isl::manage(S), AS.Loc, AS_RESTRICTION, AS.BB,
                         AS.RequiresRTC);
+    errs() << "          assume context: " << scop->AssumedContext << "\n";
+    errs() << "          invalid context: " << scop->InvalidContext << "\n";
   }
 }
 
