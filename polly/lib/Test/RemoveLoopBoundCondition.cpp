@@ -241,6 +241,7 @@ Value *getBooleanValue(ICmpInst *ICmp) {
     return ConstantInt::getFalse(ICmp->getContext());
   }
   case ICmpInst::ICMP_ULT:
+  case ICmpInst::ICMP_UGT:
   case ICmpInst::ICMP_SGT: {
     if (ZeroOpIndex == 0)
       llvm_unreachable("Something's wrong with loop bound condition");
@@ -294,6 +295,35 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
         if (not Callee)
           continue;
         if (Callee->getName().starts_with("llvm.annotation")) {
+          bool IsOnlyUseForAssumption = true;
+          for (User *U : CallInst->users()) {
+            if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
+              for (auto *UserOfICmp : ICmp->users()) {
+                if (not isa<AssumeInst>(UserOfICmp)) {
+                  IsOnlyUseForAssumption = false;
+                }
+              }
+            } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
+              for (auto *UserOfBinOp : BinOp->users()) {
+                if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
+                  for (auto *UserOfICmp : ICmp->users()) {
+                    if (not isa<AssumeInst>(UserOfICmp)) {
+                      IsOnlyUseForAssumption = false;
+                    }
+                  }
+                } else {
+                  IsOnlyUseForAssumption = false;
+                }
+              }
+            } else {
+              IsOnlyUseForAssumption = false;
+            }
+          }
+          if (IsOnlyUseForAssumption)
+            continue;
+
+          errs() << "Processing annotation call: " << *CallInst << "\n";
+
           for (User *U : CallInst->users()) {
             if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
               Lambda(ICmp, CallInst, nullptr, ToChangee);
