@@ -50,8 +50,12 @@ enum AssumptionKind {
   DELINEARIZATION,
 };
 
+std::string assumptionKindToOS(const AssumptionKind Kind);
+
 /// Enum to distinguish between assumptions and restrictions.
 enum AssumptionSign { AS_ASSUMPTION, AS_RESTRICTION };
+
+std::string assumptionSignToOS(const AssumptionSign Sign);
 
 /// Helper struct to remember assumptions.
 struct Assumption {

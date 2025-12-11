@@ -13,6 +13,7 @@
 #include "polly/Support/ScopHelper.h"
 #include "polly/Options.h"
 #include "polly/ScopInfo.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/SCEVValidator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -34,6 +35,40 @@ static cl::list<std::string> DebugFunctions(
              "side-effects are unknown. This can be used to do debug output in "
              "Polly-transformed code."),
     cl::Hidden, cl::CommaSeparated, cl::cat(PollyCategory));
+
+std::string polly::assumptionKindToOS(const AssumptionKind Kind) {
+  switch (Kind) {
+  case ALIASING:
+    return "Aliasing";
+  case INBOUNDS:
+    return "Inbounds";
+  case WRAPPING:
+    return "Wrapping";
+  case UNSIGNED:
+    return "Unsigned";
+  case PROFITABLE:
+    return "Profitable";
+  case ERRORBLOCK:
+    return "ErrorBlock";
+  case COMPLEXITY:
+    return "Complexity";
+  case INFINITELOOP:
+    return "InfiniteLoop";
+  case INVARIANTLOAD:
+    return "InvariantLoad";
+  case DELINEARIZATION:
+    return "Delinearization";
+  }
+}
+
+std::string polly::assumptionSignToOS(const AssumptionSign Sign) {
+  switch (Sign) {
+  case AS_ASSUMPTION:
+    return "Assumption";
+  case AS_RESTRICTION:
+    return "Restriction";
+  }
+}
 
 // Ensures that there is just one predecessor to the entry node from outside the
 // region.
@@ -224,8 +259,12 @@ void polly::recordAssumption(polly::RecordedAssumptionsTy *RecordedAssumptions,
                              BasicBlock *BB, bool RTC) {
   assert((Set.is_params() || BB) &&
          "Assumptions without a basic block must be parameter sets");
-  if (RecordedAssumptions)
+  if (RecordedAssumptions) {
+    errs() << "Recording toto:" << Set
+           << polly::assumptionSignToOS(Sign) + " of kind "
+           << polly::assumptionKindToOS(Kind) << "\n";
     RecordedAssumptions->push_back({Kind, Sign, Set, Loc, BB, RTC});
+  }
 }
 
 /// The SCEVExpander will __not__ generate any code for an existing SDiv/SRem
