@@ -169,6 +169,8 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
   errs() << "\tBase loop " << BaseDepth << " : "
          << (BaseLoop ? BaseLoop->getName() : "null") << "\n";
 
+  Loop *CandidateLoop = nullptr;
+  unsigned MaxCandidateDepth = BaseDepth;
   unsigned NumSucc = Terminator->getNumSuccessors();
   for (unsigned I = 0; I < NumSucc; ++I) {
     BasicBlock *Succ = Terminator->getSuccessor(I);
@@ -203,7 +205,13 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
       errs() << "\t\tSuccessor loop depth: " << SuccDepth << "\n";
 
       if (SuccDepth > BaseDepth) {
-        return SuccLoop;
+        if (SuccDepth > MaxCandidateDepth) {
+          MaxCandidateDepth = SuccDepth;
+          CandidateLoop = SuccLoop;
+        } else if (SuccDepth == MaxCandidateDepth) {
+          llvm_unreachable("Multiple candidate loops with same depth found, "
+                           "ambiguous versioned loop");
+        }
       }
     } else
       llvm_unreachable("Successeur sans boucle ?");
