@@ -27,7 +27,7 @@ using namespace polly;
 
 static cl::opt<std::string> PlutoPath("polly-pluto-path",
                                       cl::desc("Pluto path"), cl::Hidden,
-                                      cl::ValueRequired, cl::init("pluto"),
+                                      cl::ValueRequired, cl::init(""),
                                       cl::cat(PollyCategory));
 
 static cl::opt<std::string> PlutoArguments(
@@ -88,17 +88,22 @@ PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
 
   LLVM_DEBUG(errs() << "Calling pluto on the file " << FileNameInput << "\n");
 
-  std::string CopyCommand =
-      "docker cp " + FileNameInput + " pluto_container:/home/";
-  LLVM_DEBUG(errs() << "CopyCommand: " << CopyCommand << "\n");
-  std::system(CopyCommand.c_str());
+  if (PlutoPath.empty()) {
+    std::string CopyCommand =
+        "docker cp " + FileNameInput + " pluto_container:/home/";
+    LLVM_DEBUG(errs() << "CopyCommand: " << CopyCommand << "\n");
+    std::system(CopyCommand.c_str());
+  }
+  std::string RunPlutoCommand;
 
-  std::string RunPlutoCommand =
-      "docker exec pluto_container sh -c \"cat /home/" + FileNameInput + " | " +
-      PlutoPath + " " + PlutoArguments +
-      " --readscop "
-      "stdin -o "
-      "stdout\"";
+  if (PlutoPath.empty()) {
+    RunPlutoCommand = "docker exec pluto_container sh -c \"cat /home/" +
+                      FileNameInput + " | pluto " + PlutoArguments +
+                      " --readscop stdin -o stdout\"";
+  } else {
+    RunPlutoCommand = "cat ./" + FileNameInput + " | " + PlutoPath + " " +
+                      PlutoArguments + " --readscop stdin -o stdout";
+  }
   LLVM_DEBUG(errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n");
   auto ResultPluto = exec(RunPlutoCommand.c_str());
 
