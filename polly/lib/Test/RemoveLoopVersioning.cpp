@@ -217,8 +217,7 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
       llvm_unreachable("Successeur sans boucle ?");
   }
 
-  // Aucune boucle plus profonde trouvée
-  return nullptr;
+  return CandidateLoop;
 }
 
 bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
