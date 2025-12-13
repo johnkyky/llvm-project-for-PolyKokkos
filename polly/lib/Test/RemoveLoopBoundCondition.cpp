@@ -11,6 +11,7 @@
 
 #include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/ScopDetectionDiagnostic.h"
+#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/LoopFusion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
@@ -290,28 +291,23 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
     for (auto It = BB.begin(); It != BB.end();) {
       Instruction *I = &*It;
       ++It;
-      if (auto *CallInst = dyn_cast<llvm::CallInst>(I)) {
-        const Function *Callee = CallInst->getCalledFunction();
-        if (not Callee)
-          continue;
-        if (Callee->getName().starts_with("llvm.annotation")) {
-          bool IsOnlyUseForAssumption = true;
-          for (User *U : CallInst->users()) {
-            if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
+      auto [CallInst, StrRef] = polly::isAnnotationInstruction(I, "var ");
+      if (not CallInst)
+        continue;
+
+      bool IsOnlyUseForAssumption = true;
+      for (User *U : CallInst->users()) {
+        if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
+          for (auto *UserOfICmp : ICmp->users()) {
+            if (not isa<AssumeInst>(UserOfICmp)) {
+              IsOnlyUseForAssumption = false;
+            }
+          }
+        } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
+          for (auto *UserOfBinOp : BinOp->users()) {
+            if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
               for (auto *UserOfICmp : ICmp->users()) {
                 if (not isa<AssumeInst>(UserOfICmp)) {
-                  IsOnlyUseForAssumption = false;
-                }
-              }
-            } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
-              for (auto *UserOfBinOp : BinOp->users()) {
-                if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
-                  for (auto *UserOfICmp : ICmp->users()) {
-                    if (not isa<AssumeInst>(UserOfICmp)) {
-                      IsOnlyUseForAssumption = false;
-                    }
-                  }
-                } else {
                   IsOnlyUseForAssumption = false;
                 }
               }
@@ -319,30 +315,32 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
               IsOnlyUseForAssumption = false;
             }
           }
-          if (IsOnlyUseForAssumption)
+        } else {
+          IsOnlyUseForAssumption = false;
+        }
+      }
+      if (IsOnlyUseForAssumption)
+        continue;
+
+      errs() << "Processing annotation call: " << *CallInst << "\n";
+
+      for (User *U : CallInst->users()) {
+        if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
+          Lambda(ICmp, CallInst, nullptr, ToChangee);
+        } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
+          errs() << "Binary operator found: " << *BinOp << "\n";
+          // find the constant
+          unsigned ConstantIndex = 2;
+          for (unsigned I = 0; I < 2; ++I) {
+            if (isa<ConstantInt>(BinOp->getOperand(I)))
+              ConstantIndex = I;
+          }
+          if (ConstantIndex == 2)
             continue;
 
-          errs() << "Processing annotation call: " << *CallInst << "\n";
-
-          for (User *U : CallInst->users()) {
-            if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
-              Lambda(ICmp, CallInst, nullptr, ToChangee);
-            } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
-              errs() << "Binary operator found: " << *BinOp << "\n";
-              // find the constant
-              unsigned ConstantIndex = 2;
-              for (unsigned I = 0; I < 2; ++I) {
-                if (isa<ConstantInt>(BinOp->getOperand(I)))
-                  ConstantIndex = I;
-              }
-              if (ConstantIndex == 2)
-                continue;
-
-              for (auto *UserOfBinOp : BinOp->users()) {
-                if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
-                  Lambda(ICmp, CallInst, BinOp, ToChangee);
-                }
-              }
+          for (auto *UserOfBinOp : BinOp->users()) {
+            if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
+              Lambda(ICmp, CallInst, BinOp, ToChangee);
             }
           }
         }
