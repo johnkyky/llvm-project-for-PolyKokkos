@@ -12,6 +12,7 @@
 #include "polly/Test/ArrayReg2Mem.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
@@ -174,8 +175,22 @@ void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
 
     for (auto &I : BB) {
       if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        BasicBlock *LoadBB = Load->getParent();
         if (Load->getNumUses() > 1) {
-          LoadsToDemote.push_back(Load);
+          bool NeedsDemotion = true;
+          for (auto *U : Load->users()) {
+            Instruction *Inst = dyn_cast<Instruction>(U);
+            BasicBlock *InstBB = Inst->getParent();
+
+            if (InstBB != LoadBB) {
+              NeedsDemotion = false;
+              break;
+            }
+          }
+
+          if (NeedsDemotion) {
+            LoadsToDemote.push_back(Load);
+          }
         }
       }
     }
