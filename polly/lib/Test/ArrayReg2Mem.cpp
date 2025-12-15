@@ -12,15 +12,17 @@
 #include "polly/Test/ArrayReg2Mem.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
-#include <array>
+#include <algorithm>
 
 #define DEBUG_TYPE "polly-array-reg2mem"
 
@@ -161,6 +163,100 @@ void demoteNonIndexPhis(llvm::Function &F, llvm::LoopInfo &LI,
     }
   }
 }
+
+void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
+                         DominatorTree &DT) {
+  for (auto &BB : F) {
+    if (!LI.getLoopFor(&BB))
+      continue;
+
+    SmallVector<LoadInst *, 16> LoadsToDemote;
+
+    for (auto &I : BB) {
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (Load->getNumUses() > 1) {
+          LoadsToDemote.push_back(Load);
+        }
+      }
+    }
+
+    for (LoadInst *Load : LoadsToDemote) {
+      errs() << "Demoting Load: " << *Load << " with " << Load->getNumUses()
+             << " uses.\n";
+
+      SmallVector<User *, 8> Users;
+      for (auto *U : Load->users()) {
+        Users.push_back(U);
+      }
+
+      // remove duplicates
+
+      std::sort(Users.begin(), Users.end(), [](User *A, User *B) {
+        auto *InstA = cast<Instruction>(A);
+        auto *InstB = cast<Instruction>(B);
+        return InstA->comesBefore(InstB);
+      });
+
+      for (size_t I = 1; I < Users.size(); ++I) {
+        auto *CurrentUser = Users[I];
+        Instruction *CurrentUserInst = dyn_cast<Instruction>(CurrentUser);
+
+        Instruction *NewLoad = Load->clone();
+
+        if (Load->hasName())
+          NewLoad->setName(Load->getName() + ".split." + Twine(I));
+
+        NewLoad->insertAfter(CurrentUserInst->getPrevNode());
+
+        unsigned IndexUse = 0;
+        for (auto &Op : CurrentUserInst->operands()) {
+          if (Op == Load)
+            break;
+          IndexUse++;
+        }
+        CurrentUser->setOperand(IndexUse, NewLoad);
+      }
+    }
+  }
+}
+
+void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE) {
+  for (auto &BB : F) {
+    if (not LI.getLoopFor(&BB))
+      continue;
+
+    for (auto &I : BB) {
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (Load->getNumUses() <= 1)
+          continue;
+
+        Value *Ptr = Load->getPointerOperand();
+        errs() << "Examining Load: " << *Load << "  " << Load->getNumUses()
+               << "  " << *Ptr << "\n";
+
+        for (auto *U : Load->users()) {
+          Instruction *Inst = dyn_cast<Instruction>(U);
+          errs() << "    On use " << *Inst << "\n";
+          // if (Inst == nullptr || Inst == Load)
+          //   continue;
+          // errs() << "   On use " << *Inst << "\n";
+          // if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
+          //   if (Store->getValueOperand() != Load)
+          //     continue;
+          //   errs() << "    Found store: " << *Store << "\n";
+          //   IRBuilder<> Builder(Load);
+          //   LoadInst *NewLoad =
+          //       Builder.CreateLoad(Load->getType(), Ptr, "demoted_load");
+          //   Store->setOperand(0, NewLoad);
+          //   errs() << "    Replaced store value with new load: " << *NewLoad
+          //          << "\n";
+          // }
+        }
+      }
+    }
+  }
+  return;
+}
 } // namespace
 
 PreservedAnalyses ArrayReg2MemPass::run(Function &F,
@@ -173,7 +269,14 @@ PreservedAnalyses ArrayReg2MemPass::run(Function &F,
 
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-  demoteNonIndexPhis(F, LI, SE);
+  // demoteNonIndexPhis(F, LI, SE);
+
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  demoteUsesOfArrayss(F, LI, SE, DT);
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error("IR verification failed.");
+  }
 
   LLVM_DEBUG(errs() << "ArrayReg2MemPass pass done\n");
 

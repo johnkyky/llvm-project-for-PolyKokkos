@@ -355,7 +355,7 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
 
   PM.addPass(ArrayFusion());
   PM.addPass(InstCombinePass());
-  // PM.addPass(ArrayReg2MemPass());
+  PM.addPass(ArrayReg2MemPass());
   PM.addPass(ADCEPass());
 
   PassBuilder PB;
