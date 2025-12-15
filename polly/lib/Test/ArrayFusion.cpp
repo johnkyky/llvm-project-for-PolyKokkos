@@ -12,6 +12,7 @@
 #include "polly/Test/ArrayFusion.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "polly-array-fusion"
@@ -100,6 +101,10 @@ PreservedAnalyses ArrayFusion::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   DT.recalculate(F);
   sameArraysFusion(F, AM.getResult<ExtractAnnotatedSizes>(F), DT);
+
+  if (verifyFunction(F, &errs())) {
+    report_fatal_error("IR verification failed.");
+  }
 
   LLVM_DEBUG(errs() << "ArrayFusion pass done\n");
 
