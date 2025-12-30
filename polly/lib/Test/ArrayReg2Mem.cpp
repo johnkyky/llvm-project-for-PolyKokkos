@@ -200,11 +200,12 @@ void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
              << " uses.\n";
 
       SmallVector<User *, 8> Users;
+      SmallPtrSet<User *, 8> Seen;
       for (auto *U : Load->users()) {
-        Users.push_back(U);
+        if (Seen.insert(U).second) {
+          Users.push_back(U);
+        }
       }
-
-      // remove duplicates
 
       std::sort(Users.begin(), Users.end(), [](User *A, User *B) {
         auto *InstA = cast<Instruction>(A);
