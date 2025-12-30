@@ -33,7 +33,11 @@ namespace {
 struct PolicyBound {
   std::string Policy;
   size_t PolicyIndex;
+
+  bool HasBoundType = false;
   std::string BoundType;
+
+  bool HasBoundIndex = false;
   size_t BoundIndex;
 
   // IR
@@ -158,20 +162,32 @@ std::string comparisonToString(const Comparison &C) {
 
 std::optional<Operand> parseOperand(const std::string &S) {
   static const std::regex PolicyRegex(
-      "(policy|p)(\\d+)\\.(lower|l|upper|u)(\\d+)");
+      "(policy|p)(\\d+)\\.(?:(lower|l|upper|u)(\\d*))?");
   std::smatch Match;
 
   if (std::regex_match(S, Match, PolicyRegex)) {
-    std::string BoundTypeStr = Match[3].str();
+    size_t PolicyIndex = std::stoul(Match[2].str());
 
-    if (BoundTypeStr == "l") {
-      BoundTypeStr = "lower";
-    } else if (BoundTypeStr == "u") {
-      BoundTypeStr = "upper";
+    std::string BoundTypeStr;
+    bool HasBoundType = Match[3].matched;
+
+    if (HasBoundType) {
+      BoundTypeStr = Match[3].str();
+      if (BoundTypeStr == "l")
+        BoundTypeStr = "lower";
+      else if (BoundTypeStr == "u")
+        BoundTypeStr = "upper";
     }
 
-    return PolicyBound{"policy", (size_t)std::stoul(Match[2].str()),
-                       BoundTypeStr, (size_t)std::stoul(Match[4].str())};
+    size_t Dimension = 0;
+    bool HasBoundIndex = false;
+    if (HasBoundType && Match[4].matched && !Match[4].str().empty()) {
+      Dimension = (size_t)std::stoul(Match[4].str());
+      HasBoundIndex = true;
+    }
+
+    return PolicyBound{"policy",     PolicyIndex,   HasBoundType,
+                       BoundTypeStr, HasBoundIndex, Dimension};
   }
 
   long Val;
@@ -192,7 +208,9 @@ std::optional<Operand> parseOperand(const std::string &S) {
   return std::nullopt;
 }
 
-std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
+std::vector<Comparison>
+parseComparisons(const std::string &AssumptionsStr,
+                 SmallVector<LoopBoundT, 4> &LoopBoundPolicyVec) {
   std::vector<Comparison> Results;
 
   static const std::regex ComparisonRegex(
@@ -239,6 +257,93 @@ std::vector<Comparison> parseComparisons(const std::string &AssumptionsStr) {
         std::holds_alternative<PolicyBound>(RhsOpt.value())) {
       auto &LHSBound = std::get<PolicyBound>(LhsOpt.value());
       auto &RHSBound = std::get<PolicyBound>(RhsOpt.value());
+
+      if (LHSBound.PolicyIndex != RHSBound.PolicyIndex and
+          LHSBound.HasBoundType == RHSBound.HasBoundType and
+          LHSBound.HasBoundType == false) {
+        size_t LHSDim = LoopBoundAnalysis::getNumDimForPolicy(
+            LoopBoundPolicyVec, LHSBound.PolicyIndex);
+        size_t RHSDim = LoopBoundAnalysis::getNumDimForPolicy(
+            LoopBoundPolicyVec, RHSBound.PolicyIndex);
+
+        if (LHSDim != RHSDim) {
+          report_fatal_error("Left and right assumption policy bound must have "
+                             "the same number of dimensions if no bound type "
+                             "is specified: '" +
+                             Twine(CompStdStr) + "'");
+        }
+
+        for (size_t Dim = 0; Dim < LHSDim; ++Dim) {
+          PolicyBound LBoundLower = LHSBound;
+          LBoundLower.BoundType = "lower";
+          LBoundLower.BoundIndex = Dim;
+          LBoundLower.HasBoundType = true;
+
+          PolicyBound RBoundLower = RHSBound;
+          RBoundLower.BoundType = "lower";
+          RBoundLower.BoundIndex = Dim;
+          RBoundLower.HasBoundType = true;
+
+          Comparison CompLower{LBoundLower, Op, RBoundLower};
+          Results.push_back(CompLower);
+
+          PolicyBound LBoundUpper = LHSBound;
+          LBoundUpper.BoundType = "upper";
+          LBoundUpper.BoundIndex = Dim;
+          LBoundUpper.HasBoundType = true;
+
+          PolicyBound RBoundUpper = RHSBound;
+          RBoundUpper.BoundType = "upper";
+          RBoundUpper.BoundIndex = Dim;
+          RBoundUpper.HasBoundType = true;
+
+          Comparison CompUpper{LBoundUpper, Op, RBoundUpper};
+          Results.push_back(CompUpper);
+        }
+        continue;
+      }
+
+      if (LHSBound.HasBoundType != RHSBound.HasBoundType) {
+        report_fatal_error("Left and right assumption policy bound must "
+                           "either both have a bound type or none: '" +
+                           Twine(CompStdStr) + "'");
+      }
+
+      if (LHSBound.PolicyIndex != RHSBound.PolicyIndex and
+          LHSBound.HasBoundIndex == RHSBound.HasBoundIndex and
+          LHSBound.HasBoundIndex == false) {
+        size_t LHSDim = LoopBoundAnalysis::getNumDimForPolicy(
+            LoopBoundPolicyVec, LHSBound.PolicyIndex);
+        size_t RHSDim = LoopBoundAnalysis::getNumDimForPolicy(
+            LoopBoundPolicyVec, RHSBound.PolicyIndex);
+
+        if (LHSDim != RHSDim) {
+          report_fatal_error("Left and right assumption policy bound must have "
+                             "the same number of dimensions if no bound index "
+                             "is specified: '" +
+                             Twine(CompStdStr) + "'");
+        }
+
+        for (size_t Dim = 0; Dim < LHSDim; ++Dim) {
+          PolicyBound LBound = LHSBound;
+          LBound.HasBoundIndex = true;
+          LBound.BoundIndex = Dim;
+
+          PolicyBound RBound = RHSBound;
+          RBound.HasBoundIndex = true;
+          RBound.BoundIndex = Dim;
+
+          Comparison Comp{LBound, Op, RBound};
+          Results.push_back(Comp);
+        }
+        continue;
+      }
+      if (LHSBound.HasBoundIndex != RHSBound.HasBoundIndex) {
+        report_fatal_error("Left and right assumption policy bound must "
+                           "either both have a bound index or none: '" +
+                           Twine(CompStdStr) + "'");
+      }
+
       if (LHSBound.PolicyIndex == RHSBound.PolicyIndex and
           LHSBound.BoundType == RHSBound.BoundType and
           LHSBound.BoundIndex == RHSBound.BoundIndex) {
@@ -323,7 +428,8 @@ std::vector<Comparison> parseAssumptions(
     StringRef AssumptionsStr, SmallVector<LoopBoundT, 4> &LoopBoundPolicyVec,
     SmallVector<std::pair<Instruction *, StringRef>, 2> &LoopBoundVarVec) {
 
-  auto ComparaisonVec = parseComparisons(AssumptionsStr.str());
+  auto ComparaisonVec =
+      parseComparisons(AssumptionsStr.str(), LoopBoundPolicyVec);
 
   auto IsValidLoopBound = [&LoopBoundPolicyVec,
                            &LoopBoundVarVec](auto &C) -> bool {
