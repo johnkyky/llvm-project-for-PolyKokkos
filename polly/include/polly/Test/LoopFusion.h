@@ -44,7 +44,10 @@ private:
 
 public:
   using Result = SmallVector<LoopBoundT, 4>;
-  Result run(Function &F, FunctionAnalysisManager &AM);
+  const Result run(Function &F, FunctionAnalysisManager &AM);
+
+  static size_t getNumPolicies(Result &R);
+  static size_t getNumDimForPolicy(Result &R, size_t PolicyIdx);
 };
 
 struct LoopFusionPass final : PassInfoMixin<LoopFusionPass> {

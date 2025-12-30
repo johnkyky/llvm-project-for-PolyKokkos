@@ -95,10 +95,27 @@ LoopBoundAnalysis::getLoopBoundInstructions(Function &F, DominatorTree &DT) {
   return LoopBoundVec;
 }
 
-LoopBoundAnalysis::Result LoopBoundAnalysis::run(Function &F,
-                                                 FunctionAnalysisManager &AM) {
+const LoopBoundAnalysis::Result
+LoopBoundAnalysis::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   return getLoopBoundInstructions(F, DT);
+}
+
+size_t LoopBoundAnalysis::getNumPolicies(LoopBoundAnalysis::Result &R) {
+  if (R.empty())
+    return 0;
+  return R.back().IndexPolicy + 1;
+}
+
+size_t LoopBoundAnalysis::getNumDimForPolicy(LoopBoundAnalysis::Result &R,
+                                             size_t PolicyIdx) {
+  size_t MaxDim = 1;
+  for (auto &LB : R) {
+    if (LB.IndexPolicy == PolicyIdx && LB.Depth + 1 > MaxDim) {
+      MaxDim = LB.Depth + 1;
+    }
+  }
+  return MaxDim;
 }
 
 raw_ostream &polly::operator<<(raw_ostream &OS,
