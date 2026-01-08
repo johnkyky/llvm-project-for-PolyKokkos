@@ -12,7 +12,6 @@
 #include "polly/Test/FunctionPassTest.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-#include <iostream>
 
 using namespace llvm;
 using namespace polly;
@@ -41,27 +40,11 @@ AnalysisFunctionPrinterPassTest::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::all();
 }
 
-void printFunction(int Depth, const Function *F) {
-  if (F == nullptr or F->isDeclaration()) {
-    return;
-  }
-
-  for (int I = 0; I < Depth; I++)
-    llvm::errs() << "\t";
-  llvm::errs() << "visit " << F->getName() << "\n";
-
-  for (auto &BB : *F) {
-    for (auto &I : BB) {
-      if (auto *CB = dyn_cast<CallBase>(&I)) {
-        printFunction(Depth + 1, CB->getCalledFunction());
-      }
-    }
-  }
-}
-
 PreservedAnalyses FunctionPassTest::run(Function &F,
                                         FunctionAnalysisManager &AM) {
-  std::cout << "FunctionPassTest : " << F.getName().str() << std::endl;
+  errs() << "FunctionPassTest : " << F.getName().str() << "\n";
+
+  errs() << "FunctionPassTest pass done\n";
 
   return PreservedAnalyses::all();
 }
