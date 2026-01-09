@@ -87,6 +87,11 @@ static cl::opt<bool> PollyGenerateRTCPrint(
     cl::desc("Emit code that prints the runtime check result dynamically."),
     cl::Hidden, cl::cat(PollyCategory));
 
+static cl::opt<bool> PollyGenerateParamsPrint(
+    "polly-codegen-emit-params-print",
+    cl::desc("Emit code that prints the runtime parameters values."),
+    cl::Hidden, cl::cat(PollyCategory));
+
 // If this option is set we always use the isl AST generator to regenerate
 // memory accesses. Without this option set we regenerate expressions using the
 // original SCEV expressions and only generate new expressions in case the
@@ -1426,6 +1431,30 @@ Value *IslNodeBuilder::createRTC(isl_ast_expr *Condition) {
         "  (0 failed, -1 succeeded)\n"
         "  (if one or both are 0 falling back to original code, if both are -1 "
         "executing Polly code)\n");
+  }
+
+  if (PollyGenerateParamsPrint) {
+    int Dim = 0;
+    for (const SCEV *Parameter : S.parameters()) {
+      std::string Str;
+      llvm::raw_string_ostream OS(Str);
+
+      OS << "p_" << Dim;
+      Value *V = nullptr;
+      if (auto *SU = llvm::dyn_cast<llvm::SCEVUnknown>(Parameter)) {
+        V = SU->getValue();
+        OS << " (";
+        V->printAsOperand(OS, false);
+        OS << ") => ";
+      }
+
+      std::string VarName = OS.str();
+
+      Dim++;
+      if (not V)
+        continue;
+      RuntimeDebugBuilder::createCPUPrinter(Builder, VarName, V, "\n");
+    }
   }
 
   RTC = Builder.CreateAnd(RTC, OverflowHappened, "polly.rtc.result");
