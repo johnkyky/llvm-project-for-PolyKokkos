@@ -105,6 +105,7 @@ add_llvm_pass_plugin(Polly
   Test/ArrayReg2Mem.cpp
   Test/TriangularLoopFix.cpp
   Test/VarFusion.cpp
+  Test/PrintParamsValue.cpp
 
   ${POLLY_HEADER_FILES}
 

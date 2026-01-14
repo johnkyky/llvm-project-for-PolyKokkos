@@ -49,6 +49,7 @@
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
 #include "polly/Test/ModulePassTest.h"
+#include "polly/Test/PrintParamsValue.h"
 #include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/Test/ScheduleOptimizer.h"
@@ -357,6 +358,8 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
   PM.addPass(InstCombinePass());
   PM.addPass(ArrayReg2MemPass());
   PM.addPass(ADCEPass());
+
+  PM.addPass(PrintParamsValuePass());
 
   PassBuilder PB;
   ScopPassManager SPM;
