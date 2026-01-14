@@ -13,12 +13,14 @@
 #ifndef LLVM_CLANG_SEMA_SEMAX86_H
 #define LLVM_CLANG_SEMA_SEMAX86_H
 
-#include "clang/AST/Expr.h"
+#include "clang/AST/ASTFwd.h"
 #include "clang/Basic/LLVM.h"
-#include "clang/Basic/TargetInfo.h"
 #include "clang/Sema/SemaBase.h"
 
 namespace clang {
+class ParsedAttr;
+class TargetInfo;
+
 class SemaX86 : public SemaBase {
 public:
   SemaX86(Sema &S);
@@ -32,6 +34,14 @@ public:
                                          ArrayRef<int> ArgNums);
   bool CheckBuiltinFunctionCall(const TargetInfo &TI, unsigned BuiltinID,
                                 CallExpr *TheCall);
+
+  void handleAnyInterruptAttr(Decl *D, const ParsedAttr &AL);
+  void handleForceAlignArgPointerAttr(Decl *D, const ParsedAttr &AL);
+
+  bool checkTargetClonesAttr(const SmallVectorImpl<StringRef> &Params,
+                             const SmallVectorImpl<SourceLocation> &Locs,
+                             SmallVectorImpl<SmallString<64>> &NewParams,
+                             SourceLocation AttrLoc);
 };
 } // namespace clang
 

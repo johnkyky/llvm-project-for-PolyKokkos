@@ -10,7 +10,6 @@
 #include "mlir/Interfaces/InferIntRangeInterface.h"
 #include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 
-#include "llvm/Support/Debug.h"
 #include <optional>
 
 #define DEBUG_TYPE "int-range-analysis"
@@ -35,10 +34,28 @@ convertArithOverflowFlags(arith::IntegerOverflowFlags flags) {
 
 void arith::ConstantOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
                                           SetIntRangeFn setResultRange) {
-  auto constAttr = llvm::dyn_cast_or_null<IntegerAttr>(getValue());
-  if (constAttr) {
-    const APInt &value = constAttr.getValue();
+  if (auto scalarCstAttr = llvm::dyn_cast_or_null<IntegerAttr>(getValue())) {
+    const APInt &value = scalarCstAttr.getValue();
     setResultRange(getResult(), ConstantIntRanges::constant(value));
+    return;
+  }
+  if (auto arrayCstAttr =
+          llvm::dyn_cast_or_null<DenseIntElementsAttr>(getValue())) {
+    if (arrayCstAttr.isSplat()) {
+      setResultRange(getResult(), ConstantIntRanges::constant(
+                                      arrayCstAttr.getSplatValue<APInt>()));
+      return;
+    }
+
+    std::optional<ConstantIntRanges> result;
+    for (const APInt &val : arrayCstAttr) {
+      auto range = ConstantIntRanges::constant(val);
+      result = (result ? result->rangeUnion(range) : range);
+    }
+
+    assert(result && "Zero-sized vectors are not allowed");
+    setResultRange(getResult(), *result);
+    return;
   }
 }
 
@@ -295,18 +312,30 @@ void arith::CmpIOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
 // SelectOp
 //===----------------------------------------------------------------------===//
 
-void arith::SelectOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
-                                        SetIntRangeFn setResultRange) {
-  std::optional<APInt> mbCondVal = argRanges[0].getConstantValue();
+void arith::SelectOp::inferResultRangesFromOptional(
+    ArrayRef<IntegerValueRange> argRanges, SetIntLatticeFn setResultRange) {
+  std::optional<APInt> mbCondVal =
+      argRanges[0].isUninitialized()
+          ? std::nullopt
+          : argRanges[0].getValue().getConstantValue();
+
+  const IntegerValueRange &trueCase = argRanges[1];
+  const IntegerValueRange &falseCase = argRanges[2];
 
   if (mbCondVal) {
     if (mbCondVal->isZero())
-      setResultRange(getResult(), argRanges[2]);
+      setResultRange(getResult(), falseCase);
     else
-      setResultRange(getResult(), argRanges[1]);
+      setResultRange(getResult(), trueCase);
     return;
   }
-  setResultRange(getResult(), argRanges[1].rangeUnion(argRanges[2]));
+
+  // When one of the ranges is uninitialized, set the whole range to max
+  // otherwise the result will ignore the uninitialized range.
+  if (trueCase.isUninitialized() || falseCase.isUninitialized())
+    setResultRange(getResult(), IntegerValueRange::getMaxRange(getResult()));
+  else
+    setResultRange(getResult(), IntegerValueRange::join(trueCase, falseCase));
 }
 
 //===----------------------------------------------------------------------===//

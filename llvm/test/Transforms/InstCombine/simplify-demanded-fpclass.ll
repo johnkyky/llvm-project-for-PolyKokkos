@@ -10,13 +10,15 @@ declare float @llvm.trunc.f32(float)
 declare float @llvm.arithmetic.fence.f32(float)
 declare float @llvm.minnum.f32(float, float)
 declare float @llvm.maxnum.f32(float, float)
+declare float @llvm.minimumnum.f32(float, float)
+declare float @llvm.maximumnum.f32(float, float)
 
 
 define float @ninf_user_select_inf(i1 %cond, float %x, float %y) {
 ; CHECK-LABEL: define float @ninf_user_select_inf
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], float [[Y:%.*]]) {
 ; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float [[X]], float 0x7FF0000000000000
-; CHECK-NEXT:    [[NINF_USER:%.*]] = fmul ninf float [[SELECT]], [[Y]]
+; CHECK-NEXT:    [[NINF_USER:%.*]] = fmul ninf float [[Y]], [[SELECT]]
 ; CHECK-NEXT:    ret float [[NINF_USER]]
 ;
   %select = select i1 %cond, float %x, float 0x7FF0000000000000
@@ -89,6 +91,129 @@ define nofpclass(inf) float @ret_nofpclass_inf__ninf() {
 ; CHECK-NEXT:    ret float poison
 ;
   ret float 0xFFF0000000000000
+}
+
+; Basic aggregate tests to ensure this does not crash.
+define nofpclass(nan) { float } @ret_nofpclass_struct_ty() {
+; CHECK-LABEL: define nofpclass(nan) { float } @ret_nofpclass_struct_ty() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float } zeroinitializer
+;
+entry:
+  ret { float } zeroinitializer
+}
+
+define nofpclass(nan) { float, float } @ret_nofpclass_multiple_elems_struct_ty() {
+; CHECK-LABEL: define nofpclass(nan) { float, float } @ret_nofpclass_multiple_elems_struct_ty() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float, float } zeroinitializer
+;
+entry:
+  ret { float, float } zeroinitializer
+}
+
+define nofpclass(nan) { <4 x float>, <4 x float> } @ret_nofpclass_vector_elems_struct_ty() {
+; CHECK-LABEL: define nofpclass(nan) { <4 x float>, <4 x float> } @ret_nofpclass_vector_elems_struct_ty() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { <4 x float>, <4 x float> } zeroinitializer
+;
+entry:
+  ret { <4 x float>, <4 x float> } zeroinitializer
+}
+
+define nofpclass(nan) [ 5 x float ] @ret_nofpclass_array_ty() {
+; CHECK-LABEL: define nofpclass(nan) [5 x float] @ret_nofpclass_array_ty() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret [5 x float] zeroinitializer
+;
+entry:
+  ret [ 5 x float ] zeroinitializer
+}
+
+define nofpclass(nan) [ 2 x [ 5 x float ]] @ret_nofpclass_nested_array_ty() {
+; CHECK-LABEL: define nofpclass(nan) [2 x [5 x float]] @ret_nofpclass_nested_array_ty() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret [2 x [5 x float]] zeroinitializer
+;
+entry:
+  ret [ 2 x [ 5 x float ]] zeroinitializer
+}
+
+define nofpclass(pinf) { float } @ret_nofpclass_struct_ty_pinf__ninf() {
+; CHECK-LABEL: define nofpclass(pinf) { float } @ret_nofpclass_struct_ty_pinf__ninf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float } { float 0xFFF0000000000000 }
+;
+entry:
+  ret { float } { float 0xFFF0000000000000 }
+}
+
+define nofpclass(pinf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_pinf__ninf() {
+; CHECK-LABEL: define nofpclass(pinf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_pinf__ninf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float, float } { float 0xFFF0000000000000, float 0xFFF0000000000000 }
+;
+entry:
+  ret { float, float } { float 0xFFF0000000000000, float 0xFFF0000000000000 }
+}
+
+define nofpclass(pinf) { <2 x float> } @ret_nofpclass_vector_elems_struct_ty_pinf__ninf() {
+; CHECK-LABEL: define nofpclass(pinf) { <2 x float> } @ret_nofpclass_vector_elems_struct_ty_pinf__ninf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { <2 x float> } { <2 x float> splat (float 0xFFF0000000000000) }
+;
+entry:
+  ret { <2 x float>} { <2 x float> <float 0xFFF0000000000000, float 0xFFF0000000000000> }
+}
+
+; UTC_ARGS: --disable
+; FileCheck does not like the nested square brackets.
+define nofpclass(pinf) [ 1 x [ 1 x float ]] @ret_nofpclass_nested_array_ty_pinf__ninf() {
+; CHECK-LABEL: @ret_nofpclass_nested_array_ty_pinf__ninf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret {{.*}}float 0xFFF0000000000000
+;
+entry:
+  ret [ 1 x [ 1 x float ]] [[ 1 x float ] [float 0xFFF0000000000000]]
+}
+; UTC_ARGS: --enable
+
+define nofpclass(pzero) { float, float } @ret_nofpclass_multiple_elems_struct_ty_pzero__nzero() {
+; CHECK-LABEL: define nofpclass(pzero) { float, float } @ret_nofpclass_multiple_elems_struct_ty_pzero__nzero() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float, float } { float -0.000000e+00, float -0.000000e+00 }
+;
+entry:
+  ret { float, float } { float -0.0, float -0.0 }
+}
+
+define nofpclass(ninf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_ninf__npinf() {
+; CHECK-LABEL: define nofpclass(ninf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_ninf__npinf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float, float } { float 0x7FF0000000000000, float 0x7FF0000000000000 }
+;
+entry:
+  ret { float, float } { float 0x7FF0000000000000, float 0x7FF0000000000000 }
+}
+
+; FIXME (should be poison): Support computeKnownFPClass() for non-zero aggregates.
+define nofpclass(inf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_inf__npinf() {
+; CHECK-LABEL: define nofpclass(inf) { float, float } @ret_nofpclass_multiple_elems_struct_ty_inf__npinf() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret { float, float } { float 0x7FF0000000000000, float 0x7FF0000000000000 }
+;
+entry:
+  ret { float, float } { float 0x7FF0000000000000, float 0x7FF0000000000000 }
+}
+
+; FIXME (should be poison): Support computeKnownFPClass() for non-zero aggregates.
+define nofpclass(nzero) [ 1 x float ] @ret_nofpclass_multiple_elems_struct_ty_nzero_nzero() {
+; CHECK-LABEL: define nofpclass(nzero) [1 x float] @ret_nofpclass_multiple_elems_struct_ty_nzero_nzero() {
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    ret [1 x float] [float -0.000000e+00]
+;
+entry:
+  ret [ 1 x float ] [ float -0.0 ]
 }
 
 ; Negative test, do nothing
@@ -258,7 +383,7 @@ define nofpclass(inf) float @ret_nofpclass_inf__select_multi_use_pinf_lhs(i1 %co
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], ptr [[PTR:%.*]]) {
 ; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float 0x7FF0000000000000, float [[X]]
 ; CHECK-NEXT:    store float [[SELECT]], ptr [[PTR]], align 4
-; CHECK-NEXT:    ret float [[SELECT]]
+; CHECK-NEXT:    ret float [[X]]
 ;
   %select = select i1 %cond, float 0x7FF0000000000000, float %x
   store float %select, ptr %ptr
@@ -520,6 +645,53 @@ define nofpclass(nan ninf nnorm nsub nzero) float @ret_nofpclass_nonegatives_non
   ret float %fneg
 }
 
+define nofpclass(snan) float @fabs_src_known_positive(float nofpclass(nan ninf nnorm nsub nzero) %always.positive) {
+; CHECK-LABEL: define nofpclass(snan) float @fabs_src_known_positive
+; CHECK-SAME: (float nofpclass(nan ninf nzero nsub nnorm) [[ALWAYS_POSITIVE:%.*]]) {
+; CHECK-NEXT:    ret float [[ALWAYS_POSITIVE]]
+;
+  %fabs = call float @llvm.fabs.f32(float %always.positive)
+  ret float %fabs
+}
+
+define nofpclass(snan) float @fabs_src_known_positive_or_nan(float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @fabs_src_known_positive_or_nan
+; CHECK-SAME: (float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[FABS:%.*]] = call float @llvm.fabs.f32(float [[ALWAYS_POSITIVE_OR_NAN]])
+; CHECK-NEXT:    ret float [[FABS]]
+;
+  %fabs = call float @llvm.fabs.f32(float %always.positive.or.nan)
+  ret float %fabs
+}
+
+define nofpclass(snan) float @fabs_nnan_src_known_positive_or_nan(float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @fabs_nnan_src_known_positive_or_nan
+; CHECK-SAME: (float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    ret float [[ALWAYS_POSITIVE_OR_NAN]]
+;
+  %fabs = call nnan float @llvm.fabs.f32(float %always.positive.or.nan)
+  ret float %fabs
+}
+
+define nofpclass(nan) float @ret_nonan_fabs_src_known_positive_or_nan(float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(nan) float @ret_nonan_fabs_src_known_positive_or_nan
+; CHECK-SAME: (float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    ret float [[ALWAYS_POSITIVE_OR_NAN]]
+;
+  %fabs = call float @llvm.fabs.f32(float %always.positive.or.nan)
+  ret float %fabs
+}
+
+define nofpclass(snan) float @fabs_src_known_negative(float nofpclass(nan pinf pnorm psub pzero) %always.negative) {
+; CHECK-LABEL: define nofpclass(snan) float @fabs_src_known_negative
+; CHECK-SAME: (float nofpclass(nan pinf pzero psub pnorm) [[ALWAYS_NEGATIVE:%.*]]) {
+; CHECK-NEXT:    [[FABS:%.*]] = call float @llvm.fabs.f32(float [[ALWAYS_NEGATIVE]])
+; CHECK-NEXT:    ret float [[FABS]]
+;
+  %fabs = call float @llvm.fabs.f32(float %always.negative)
+  ret float %fabs
+}
+
 ; should fold to ret copysign(%x)
 define nofpclass(inf) float @ret_nofpclass_inf__copysign_unknown_select_pinf_rhs(i1 %cond, float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(inf) float @ret_nofpclass_inf__copysign_unknown_select_pinf_rhs
@@ -555,12 +727,11 @@ define nofpclass(inf) float @ret_nofpclass_inf__copysign_negative_select_pinf_rh
   ret float %copysign
 }
 
-; can fold to fneg(fabs(x))
+; can't fold to fneg(fabs(x))
 define nofpclass(pinf pnorm psub pzero) float @ret_nofpclass_nopositives_copysign(float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(pinf pzero psub pnorm) float @ret_nofpclass_nopositives_copysign
 ; CHECK-SAME: (float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[TMP1:%.*]] = call float @llvm.fabs.f32(float [[X]])
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg float [[TMP1]]
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[X]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %copysign = call float @llvm.copysign.f32(float %x, float %unknown.sign)
@@ -580,6 +751,18 @@ define nofpclass(pinf pnorm psub pzero) float @ret_nofpclass_nopositives_copysig
 }
 
 ; can fold to fneg(fabs(x))
+define nofpclass(pnorm psub pzero) float @ret_nofpclass_nopositive_finites_copysign_nnan_ninf_flag(float %x, float %unknown.sign) {
+; CHECK-LABEL: define nofpclass(pzero psub pnorm) float @ret_nofpclass_nopositive_finites_copysign_nnan_ninf_flag
+; CHECK-SAME: (float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
+; CHECK-NEXT:    [[TMP1:%.*]] = call nnan ninf float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg nnan ninf float [[TMP1]]
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan ninf float @llvm.copysign.f32(float %x, float %unknown.sign)
+  ret float %copysign
+}
+
+; can't fold to fneg(fabs(x))
 define nofpclass(nan pinf pnorm psub pzero) float @ret_nofpclass_nopositives_nonan_copysign(float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(nan pinf pzero psub pnorm) float @ret_nofpclass_nopositives_nonan_copysign
 ; CHECK-SAME: (float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
@@ -591,11 +774,11 @@ define nofpclass(nan pinf pnorm psub pzero) float @ret_nofpclass_nopositives_non
   ret float %copysign
 }
 
-; can fold to fabs(x)
+; can't fold to fabs(x)
 define nofpclass(ninf nnorm nsub nzero) float @ret_nofpclass_nonegatives_copysign(float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(ninf nzero nsub nnorm) float @ret_nofpclass_nonegatives_copysign
 ; CHECK-SAME: (float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[X]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %copysign = call float @llvm.copysign.f32(float %x, float %unknown.sign)
@@ -640,7 +823,7 @@ define nofpclass(pinf pnorm psub pzero) float @ret_nofpclass_nopositives__copysi
 define nofpclass(inf nnorm nsub nzero) float @ret_nofpclass_no_negatives_noinf__copysign_unknown_select_pinf_rhs(i1 %cond, float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(inf nzero nsub nnorm) float @ret_nofpclass_no_negatives_noinf__copysign_unknown_select_pinf_rhs
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[X]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %select = select i1 %cond, float %x, float 0x7FF0000000000000
@@ -652,8 +835,7 @@ define nofpclass(inf nnorm nsub nzero) float @ret_nofpclass_no_negatives_noinf__
 define nofpclass(inf pnorm psub pzero) float @ret_nofpclass_no_positives_noinf__copysign_unknown_select_pinf_rhs(i1 %cond, float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(inf pzero psub pnorm) float @ret_nofpclass_no_positives_noinf__copysign_unknown_select_pinf_rhs
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[TMP1:%.*]] = call float @llvm.fabs.f32(float [[X]])
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg float [[TMP1]]
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[X]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %select = select i1 %cond, float %x, float 0x7FF0000000000000
@@ -665,8 +847,8 @@ define nofpclass(inf pnorm psub pzero) float @ret_nofpclass_no_positives_noinf__
 define nofpclass(ninf nnorm nsub nzero) float @ret_nofpclass_no_negatives__copysign_unknown_select_pinf_rhs(i1 %cond, float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(ninf nzero nsub nnorm) float @ret_nofpclass_no_negatives__copysign_unknown_select_pinf_rhs
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[TMP1:%.*]] = call float @llvm.fabs.f32(float [[X]])
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = select i1 [[COND]], float [[TMP1]], float 0x7FF0000000000000
+; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float [[X]], float 0x7FF0000000000000
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[SELECT]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %select = select i1 %cond, float %x, float 0x7FF0000000000000
@@ -678,9 +860,8 @@ define nofpclass(ninf nnorm nsub nzero) float @ret_nofpclass_no_negatives__copys
 define nofpclass(pinf pnorm psub pzero) float @ret_nofpclass_no_positives__copysign_unknown_select_pinf_rhs(i1 %cond, float %x, float %unknown.sign) {
 ; CHECK-LABEL: define nofpclass(pinf pzero psub pnorm) float @ret_nofpclass_no_positives__copysign_unknown_select_pinf_rhs
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]], float [[UNKNOWN_SIGN:%.*]]) {
-; CHECK-NEXT:    [[TMP1:%.*]] = call float @llvm.fabs.f32(float [[X]])
-; CHECK-NEXT:    [[DOTNEG:%.*]] = fneg float [[TMP1]]
-; CHECK-NEXT:    [[COPYSIGN:%.*]] = select i1 [[COND]], float [[DOTNEG]], float 0xFFF0000000000000
+; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float [[X]], float 0x7FF0000000000000
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call float @llvm.copysign.f32(float [[SELECT]], float [[UNKNOWN_SIGN]])
 ; CHECK-NEXT:    ret float [[COPYSIGN]]
 ;
   %select = select i1 %cond, float %x, float 0x7FF0000000000000
@@ -715,6 +896,92 @@ define nofpclass(nan pinf pnorm psub pzero) float @ret_nofpclass_no_positives_no
   ret float %copysign
 }
 
+define nofpclass(snan) float @copysign_nnan_sign_known_positive_or_nan(float %x, float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan_sign_known_positive_or_nan
+; CHECK-SAME: (float [[X:%.*]], float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call nnan float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %x, float %always.positive.or.nan)
+  ret float %copysign
+}
+
+define nofpclass(snan) float @copysign_nnan_sign_known_positive_or_nan__drop_ub_attrs(float %x, float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan_sign_known_positive_or_nan__drop_ub_attrs
+; CHECK-SAME: (float [[X:%.*]], float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call nnan float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan noundef float @llvm.copysign.f32(float %x, float noundef nofpclass(zero) %always.positive.or.nan)
+  ret float %copysign
+}
+
+define nofpclass(snan) float @copysign_nnan_sign_known_negative_or_nan(float %x, float nofpclass(pinf pnorm psub pzero) %always.negative.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan_sign_known_negative_or_nan
+; CHECK-SAME: (float [[X:%.*]], float nofpclass(pinf pzero psub pnorm) [[ALWAYS_NEGATIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[TMP1:%.*]] = call nnan float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg nnan float [[TMP1]]
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %x, float %always.negative.or.nan)
+  ret float %copysign
+}
+
+define nofpclass(snan) float @copysign_nnan_sign_known_negative_or_nan__drop_ub_attrs(float %x, float nofpclass(pinf pnorm psub pzero) %always.negative.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan_sign_known_negative_or_nan__drop_ub_attrs
+; CHECK-SAME: (float [[X:%.*]], float nofpclass(pinf pzero psub pnorm) [[ALWAYS_NEGATIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[TMP1:%.*]] = call nnan float @llvm.fabs.f32(float [[X]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg nnan float [[TMP1]]
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan noundef float @llvm.copysign.f32(float %x, float noundef nofpclass(zero) %always.negative.or.nan)
+  ret float %copysign
+}
+
+; Fold out copysign
+define nofpclass(snan) float @copysign_nnan__known_positive__sign_known_positive_or_nan(float nofpclass(ninf nnorm nsub nzero) %known.positive, float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan__known_positive__sign_known_positive_or_nan
+; CHECK-SAME: (float nofpclass(ninf nzero nsub nnorm) [[KNOWN_POSITIVE:%.*]], float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    ret float [[KNOWN_POSITIVE]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %known.positive, float %always.positive.or.nan)
+  ret float %copysign
+}
+
+; Fold out copysign
+define nofpclass(snan) float @copysign_nnan__known_negative__sign_known_negative_or_nan(float nofpclass(pinf pnorm psub pzero) %known.negative, float nofpclass(pinf pnorm psub pzero) %always.negative.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan__known_negative__sign_known_negative_or_nan
+; CHECK-SAME: (float nofpclass(pinf pzero psub pnorm) [[KNOWN_NEGATIVE:%.*]], float nofpclass(pinf pzero psub pnorm) [[ALWAYS_NEGATIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[TMP1:%.*]] = call nnan float @llvm.fabs.f32(float [[KNOWN_NEGATIVE]])
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg nnan float [[TMP1]]
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %known.negative, float %always.negative.or.nan)
+  ret float %copysign
+}
+
+; Convert to fabs
+define nofpclass(snan) float @copysign_nnan__known_negative__sign_known_positive_or_nan(float nofpclass(pinf pnorm psub pzero) %known.negative, float nofpclass(ninf nnorm nsub nzero) %always.positive.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan__known_negative__sign_known_positive_or_nan
+; CHECK-SAME: (float nofpclass(pinf pzero psub pnorm) [[KNOWN_NEGATIVE:%.*]], float nofpclass(ninf nzero nsub nnorm) [[ALWAYS_POSITIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = call nnan float @llvm.fabs.f32(float [[KNOWN_NEGATIVE]])
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %known.negative, float %always.positive.or.nan)
+  ret float %copysign
+}
+
+; Convert to fneg(fabs)
+define nofpclass(snan) float @copysign_nnan__known_positive__sign_known_negative_or_nan(float nofpclass(ninf nnorm nsub nzero) %known.positive, float nofpclass(pinf pnorm psub pzero) %always.negative.or.nan) {
+; CHECK-LABEL: define nofpclass(snan) float @copysign_nnan__known_positive__sign_known_negative_or_nan
+; CHECK-SAME: (float nofpclass(ninf nzero nsub nnorm) [[KNOWN_POSITIVE:%.*]], float nofpclass(pinf pzero psub pnorm) [[ALWAYS_NEGATIVE_OR_NAN:%.*]]) {
+; CHECK-NEXT:    [[COPYSIGN:%.*]] = fneg nnan float [[KNOWN_POSITIVE]]
+; CHECK-NEXT:    ret float [[COPYSIGN]]
+;
+  %copysign = call nnan float @llvm.copysign.f32(float %known.positive, float %always.negative.or.nan)
+  ret float %copysign
+}
+
 ; Do nothing
 define nofpclass(ninf nnorm nsub nzero) float @ret_nofpclass_negatives__select_clamp_neg_to_zero(float %x) {
 ; CHECK-LABEL: define nofpclass(ninf nzero nsub nnorm) float @ret_nofpclass_negatives__select_clamp_neg_to_zero
@@ -742,8 +1009,19 @@ define nofpclass(ninf nnorm nsub nzero) float @ret_nofpclass_negatives__select_c
 }
 
 ; Can fold to ret +0
-define nofpclass(nan ninf nnorm nsub nzero) float @ret_nofpclass_nan_negatives__select_clamp_pos_to_zero(float %x) {
+define nofpclass(nan ninf nnorm nsub nzero) float @ret_nofpclass_nan_negatives__select_clamp_pos_to_zero(float noundef %x) {
 ; CHECK-LABEL: define nofpclass(nan ninf nzero nsub nnorm) float @ret_nofpclass_nan_negatives__select_clamp_pos_to_zero
+; CHECK-SAME: (float noundef [[X:%.*]]) {
+; CHECK-NEXT:    ret float 0.000000e+00
+;
+  %is.gt.zero = fcmp ogt float %x, 0.0
+  %select = select i1 %is.gt.zero, float 0.0, float %x
+  ret float %select
+}
+
+; Cannot fold due to undef
+define nofpclass(nan ninf nnorm nsub nzero) float @ret_nofpclass_nan_negatives__select_clamp_pos_to_zero__maybe_undef(float %x) {
+; CHECK-LABEL: define nofpclass(nan ninf nzero nsub nnorm) float @ret_nofpclass_nan_negatives__select_clamp_pos_to_zero__maybe_undef
 ; CHECK-SAME: (float [[X:%.*]]) {
 ; CHECK-NEXT:    [[IS_GT_ZERO:%.*]] = fcmp ogt float [[X]], 0.000000e+00
 ; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[IS_GT_ZERO]], float 0.000000e+00, float [[X]]
@@ -833,14 +1111,11 @@ define nofpclass(nan inf nzero nsub nnorm) float @test_powr_issue64870_2(float n
 ; CHECK-LABEL: define nofpclass(nan inf nzero nsub nnorm) float @test_powr_issue64870_2
 ; CHECK-SAME: (float nofpclass(nan inf) [[ARG:%.*]], float nofpclass(nan inf) [[ARG1:%.*]]) {
 ; CHECK-NEXT:  bb:
-; CHECK-NEXT:    [[I:%.*]] = fcmp olt float [[ARG]], 0.000000e+00
-; CHECK-NEXT:    [[I2:%.*]] = select i1 [[I]], float 0x7FF8000000000000, float [[ARG]]
-; CHECK-NEXT:    [[I3:%.*]] = tail call float @llvm.log2.f32(float noundef [[I2]])
-; CHECK-NEXT:    [[I4:%.*]] = select i1 [[I]], float 0x7FF8000000000000, float [[ARG1]]
-; CHECK-NEXT:    [[I5:%.*]] = fmul float [[I4]], [[I3]]
+; CHECK-NEXT:    [[I3:%.*]] = tail call float @llvm.log2.f32(float noundef [[ARG]])
+; CHECK-NEXT:    [[I5:%.*]] = fmul float [[ARG1]], [[I3]]
 ; CHECK-NEXT:    [[I6:%.*]] = tail call noundef nofpclass(ninf nzero nsub nnorm) float @llvm.exp2.f32(float noundef [[I5]])
-; CHECK-NEXT:    [[I10:%.*]] = fcmp oeq float [[I2]], 0.000000e+00
-; CHECK-NEXT:    [[I12:%.*]] = select i1 [[I10]], float 0.000000e+00, float [[I6]]
+; CHECK-NEXT:    [[TMP0:%.*]] = fcmp oeq float [[ARG]], 0.000000e+00
+; CHECK-NEXT:    [[I12:%.*]] = select i1 [[TMP0]], float 0.000000e+00, float [[I6]]
 ; CHECK-NEXT:    ret float [[I12]]
 ;
 bb:
@@ -878,8 +1153,8 @@ define nofpclass(nan inf) float @pow_f32(float nofpclass(nan inf) %arg, float no
 ; CHECK-NEXT:    [[I12:%.*]] = select i1 [[I11]], float [[ARG]], float 1.000000e+00
 ; CHECK-NEXT:    [[I13:%.*]] = tail call noundef float @llvm.copysign.f32(float noundef [[I4]], float noundef [[I12]])
 ; CHECK-NEXT:    [[I17:%.*]] = fcmp oeq float [[ARG]], 0.000000e+00
-; CHECK-NEXT:    [[I21:%.*]] = select i1 [[I11]], float [[ARG]], float 0.000000e+00
-; CHECK-NEXT:    [[I22:%.*]] = tail call noundef nofpclass(nan sub norm) float @llvm.copysign.f32(float noundef 0.000000e+00, float noundef [[I21]])
+; CHECK-NEXT:    [[TMP0:%.*]] = tail call nofpclass(nan sub norm) float @llvm.copysign.f32(float 0.000000e+00, float [[ARG]])
+; CHECK-NEXT:    [[I22:%.*]] = select i1 [[I11]], float [[TMP0]], float 0.000000e+00
 ; CHECK-NEXT:    [[I23:%.*]] = select i1 [[I17]], float [[I22]], float [[I13]]
 ; CHECK-NEXT:    [[I24:%.*]] = fcmp oeq float [[ARG]], 1.000000e+00
 ; CHECK-NEXT:    [[I25:%.*]] = fcmp oeq float [[ARG1]], 0.000000e+00
@@ -1003,8 +1278,7 @@ define nofpclass(inf) float @ret_nofpclass_inf__select_assumed_call_result_only_
 ; CHECK-NEXT:    [[FABS:%.*]] = call float @llvm.fabs.f32(float [[MUST_BE_INF]])
 ; CHECK-NEXT:    [[IS_INF:%.*]] = fcmp oeq float [[FABS]], 0x7FF0000000000000
 ; CHECK-NEXT:    call void @llvm.assume(i1 [[IS_INF]])
-; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float [[MUST_BE_INF]], float [[Y]]
-; CHECK-NEXT:    ret float [[SELECT]]
+; CHECK-NEXT:    ret float [[Y]]
 ;
   %must.be.inf = call float @extern()
   %fabs = call float @llvm.fabs.f32(float %must.be.inf)
@@ -1182,7 +1456,7 @@ define nofpclass(pinf) float @ret_nofpclass_pinf__minnum_ninf(i1 %cond, float %x
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]]) {
 ; CHECK-NEXT:    ret float 0xFFF0000000000000
 ;
-  %min = call float @llvm.minnum.f32(float %x, float 0xFFF0000000000000)
+  %min = call float @llvm.minimumnum.f32(float %x, float 0xFFF0000000000000)
   ret float %min
 }
 
@@ -1203,6 +1477,131 @@ define nofpclass(ninf) float @ret_nofpclass_ninf__maxnum_pinf(i1 %cond, float %x
 ; CHECK-SAME: (i1 [[COND:%.*]], float [[X:%.*]]) {
 ; CHECK-NEXT:    ret float 0x7FF0000000000000
 ;
-  %max = call float @llvm.maxnum.f32(float %x, float 0x7FF0000000000000)
+  %max = call float @llvm.maximumnum.f32(float %x, float 0x7FF0000000000000)
   ret float %max
+}
+
+declare nofpclass(inf norm sub zero) float @returns_nan()
+
+; %nan has multiple uses, but we should still know what class is is
+; %allowing this to fold to a single select.
+define nofpclass(nan) float @known_class_multiple_uses(i1 %cond0, i1 %cond1, i1 %cond2, float %unknown0, float %unknown1) {
+; CHECK-LABEL: define nofpclass(nan) float @known_class_multiple_uses
+; CHECK-SAME: (i1 [[COND0:%.*]], i1 [[COND1:%.*]], i1 [[COND2:%.*]], float [[UNKNOWN0:%.*]], float [[UNKNOWN1:%.*]]) {
+; CHECK-NEXT:    [[NAN:%.*]] = call float @returns_nan()
+; CHECK-NEXT:    [[SELECT2:%.*]] = select i1 [[COND2]], float [[UNKNOWN0]], float [[UNKNOWN1]]
+; CHECK-NEXT:    ret float [[SELECT2]]
+;
+  %nan = call float @returns_nan()
+  %select0 = select i1 %cond0, float %unknown0, float %nan
+  %select1 = select i1 %cond1, float %nan, float %unknown1
+  %select2 = select i1 %cond2, float %select0, float %select1
+  ret float %select2
+}
+
+; Do not overdefine the poison element to inf.
+define nofpclass(ninf) <2 x float> @single_class_constant_partially_poison_pinf() {
+; CHECK-LABEL: define nofpclass(ninf) <2 x float> @single_class_constant_partially_poison_pinf() {
+; CHECK-NEXT:    ret <2 x float> <float 0x7FF0000000000000, float poison>
+;
+  ret <2 x float> <float 0x7FF0000000000000, float poison>
+}
+
+define nofpclass(ninf) <2 x float> @single_class_constant_partially_undef_pinf() {
+; CHECK-LABEL: define nofpclass(ninf) <2 x float> @single_class_constant_partially_undef_pinf() {
+; CHECK-NEXT:    ret <2 x float> <float 0x7FF0000000000000, float undef>
+;
+  ret <2 x float> <float 0x7FF0000000000000, float undef>
+}
+
+define nofpclass(zero) <3 x float> @mixed_sign_zero_splat_to_poison() {
+; CHECK-LABEL: define nofpclass(zero) <3 x float> @mixed_sign_zero_splat_to_poison() {
+; CHECK-NEXT:    ret <3 x float> poison
+;
+  ret <3 x float> <float 0.0, float -0.0, float poison>
+}
+
+define nofpclass(zero) <3 x float> @partially_defined_0_splat_to_poison() {
+; CHECK-LABEL: define nofpclass(zero) <3 x float> @partially_defined_0_splat_to_poison() {
+; CHECK-NEXT:    ret <3 x float> poison
+;
+  ret <3 x float> <float 0.0, float 0.0, float poison>
+}
+
+; The select must be 0, so the exp should fold to 1. This requires
+; analysis of the select condition.
+define nofpclass(nan) float @exp_select_must_be_0(float noundef %arg, float nofpclass(inf sub norm) %zero.or.nan) {
+; CHECK-LABEL: define nofpclass(nan) float @exp_select_must_be_0
+; CHECK-SAME: (float noundef [[ARG:%.*]], float nofpclass(inf sub norm) [[ZERO_OR_NAN:%.*]]) {
+; CHECK-NEXT:    ret float 1.000000e+00
+;
+  %not.zero = fcmp one float %arg, 0.0
+  %select = select i1 %not.zero, float %zero.or.nan, float %arg
+  %exp = call float @llvm.exp.f32(float %select)
+  ret float %exp
+}
+
+; The select must be 0, so the exp should fold to 1. This requires
+; analysis of the select condition.
+define nofpclass(nan) float @exp_select_must_be_0_commute(float noundef %arg, float nofpclass(inf sub norm) %zero.or.nan) {
+; CHECK-LABEL: define nofpclass(nan) float @exp_select_must_be_0_commute
+; CHECK-SAME: (float noundef [[ARG:%.*]], float nofpclass(inf sub norm) [[ZERO_OR_NAN:%.*]]) {
+; CHECK-NEXT:    ret float 1.000000e+00
+;
+  %is.zero = fcmp oeq float %arg, 0.0
+  %select = select i1 %is.zero, float %arg, float %zero.or.nan
+  %exp = call float @llvm.exp.f32(float %select)
+  ret float %exp
+}
+
+; Select has multiple uses, with the same user
+define nofpclass(nan) float @ret_nonan_fmul_select_fmul_select_nan_multiple_use(i1 %cond, float noundef %x) {
+; CHECK-LABEL: define nofpclass(nan) float @ret_nonan_fmul_select_fmul_select_nan_multiple_use
+; CHECK-SAME: (i1 [[COND:%.*]], float noundef [[X:%.*]]) {
+; CHECK-NEXT:    [[FMUL:%.*]] = fmul float [[X]], [[X]]
+; CHECK-NEXT:    ret float [[FMUL]]
+;
+  %select = select i1 %cond, float %x, float 0x7FF8000000000000
+  %fmul = fmul float %select, %select
+  ret float %fmul
+}
+
+define nofpclass(nan) float @ret_nonan_fmul_select_fmul_select_nan_multiple_use_commute(i1 %cond, float noundef %x) {
+; CHECK-LABEL: define nofpclass(nan) float @ret_nonan_fmul_select_fmul_select_nan_multiple_use_commute
+; CHECK-SAME: (i1 [[COND:%.*]], float noundef [[X:%.*]]) {
+; CHECK-NEXT:    [[FMUL:%.*]] = fmul float [[X]], [[X]]
+; CHECK-NEXT:    ret float [[FMUL]]
+;
+  %select = select i1 %cond, float 0x7FF8000000000000, float %x
+  %fmul = fmul float %select, %select
+  ret float %fmul
+}
+
+; Select has a second, unrelated use
+define nofpclass(nan) float @ret_nonan_fmul_select_nan_other_use(i1 %cond, float noundef %x, float %y, ptr %ptr) {
+; CHECK-LABEL: define nofpclass(nan) float @ret_nonan_fmul_select_nan_other_use
+; CHECK-SAME: (i1 [[COND:%.*]], float noundef [[X:%.*]], float [[Y:%.*]], ptr [[PTR:%.*]]) {
+; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float [[X]], float 0x7FF8000000000000
+; CHECK-NEXT:    store float [[SELECT]], ptr [[PTR]], align 4
+; CHECK-NEXT:    [[NAN_USER:%.*]] = fmul float [[X]], [[Y]]
+; CHECK-NEXT:    ret float [[NAN_USER]]
+;
+  %select = select i1 %cond, float %x, float 0x7FF8000000000000
+  store float %select, ptr %ptr
+  %nan.user = fmul float %select, %y
+  ret float %nan.user
+}
+
+define nofpclass(nan) float @ret_nonan_fmul_select_nan_other_use_commute(i1 %cond, float noundef %x, float %y, ptr %ptr) {
+; CHECK-LABEL: define nofpclass(nan) float @ret_nonan_fmul_select_nan_other_use_commute
+; CHECK-SAME: (i1 [[COND:%.*]], float noundef [[X:%.*]], float [[Y:%.*]], ptr [[PTR:%.*]]) {
+; CHECK-NEXT:    [[SELECT:%.*]] = select i1 [[COND]], float 0x7FF8000000000000, float [[X]]
+; CHECK-NEXT:    store float [[SELECT]], ptr [[PTR]], align 4
+; CHECK-NEXT:    [[NAN_USER:%.*]] = fmul float [[X]], [[Y]]
+; CHECK-NEXT:    ret float [[NAN_USER]]
+;
+  %select = select i1 %cond, float 0x7FF8000000000000, float %x
+  store float %select, ptr %ptr
+  %nan.user = fmul float %select, %y
+  ret float %nan.user
 }

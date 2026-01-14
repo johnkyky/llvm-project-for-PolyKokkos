@@ -20,9 +20,11 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/IR/ConstantFold.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilderFolder.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/Compiler.h"
 
 namespace llvm {
 
@@ -31,7 +33,7 @@ class DataLayout;
 class Type;
 
 /// TargetFolder - Create constants with target dependent folding.
-class TargetFolder final : public IRBuilderFolder {
+class LLVM_ABI TargetFolder final : public IRBuilderFolder {
   const DataLayout &DL;
 
   /// Fold - Fold the constant using target specific information.
@@ -39,7 +41,7 @@ class TargetFolder final : public IRBuilderFolder {
     return ConstantFoldConstant(C, DL);
   }
 
-  virtual void anchor();
+  LLVM_DECLARE_VIRTUAL_ANCHOR_FUNCTION();
 
 public:
   explicit TargetFolder(const DataLayout &DL) : DL(DL) {}
@@ -103,7 +105,7 @@ public:
     auto *LC = dyn_cast<Constant>(LHS);
     auto *RC = dyn_cast<Constant>(RHS);
     if (LC && RC)
-      return Fold(ConstantExpr::getCompare(P, LC, RC));
+      return ConstantFoldCompareInstOperands(P, LC, RC, DL);
     return nullptr;
   }
 
@@ -115,7 +117,7 @@ public:
   }
 
   Value *FoldGEP(Type *Ty, Value *Ptr, ArrayRef<Value *> IdxList,
-                 bool IsInBounds = false) const override {
+                 GEPNoWrapFlags NW) const override {
     if (!ConstantExpr::isSupportedGetElementPtr(Ty))
       return nullptr;
 
@@ -123,10 +125,7 @@ public:
       // Every index must be constant.
       if (any_of(IdxList, [](Value *V) { return !isa<Constant>(V); }))
         return nullptr;
-      if (IsInBounds)
-        return Fold(ConstantExpr::getInBoundsGetElementPtr(Ty, PC, IdxList));
-      else
-        return Fold(ConstantExpr::getGetElementPtr(Ty, PC, IdxList));
+      return Fold(ConstantExpr::getGetElementPtr(Ty, PC, IdxList, NW));
     }
     return nullptr;
   }
@@ -217,7 +216,6 @@ public:
     return Fold(ConstantExpr::getPointerBitCastOrAddrSpaceCast(C, DestTy));
   }
 };
-
 }
 
 #endif
