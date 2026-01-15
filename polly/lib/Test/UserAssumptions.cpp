@@ -841,7 +841,7 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   LLVM_DEBUG(errs() << "UserAssumptions pass run on " << F.getName().str()
                     << "\n");
 
-  auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
+  auto LBA = LoopBoundAnalysis().run(F, AM);
   LLVM_DEBUG(errs() << LBA << "\n");
 
   auto AssumptionsStr = extractAssumptionAnnotation(F);
@@ -852,7 +852,7 @@ PreservedAnalyses UserAssumptions::run(Function &F,
   for (const auto &Cmp : Assumptions)
     LLVM_DEBUG(errs() << comparisonToString(Cmp) << "\n");
 
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto DT = DominatorTreeAnalysis().run(F, AM);
   applyAssumptions(F, Assumptions, DT);
 
   if (verifyFunction(F, &errs())) {

@@ -21,60 +21,25 @@
 #include "polly/RegisterPasses.h"
 #include "polly/Canonicalization.h"
 #include "polly/CodeGen/CodeGeneration.h"
-#include "polly/CodeGen/IslAst.h"
-#include "polly/CodePreparation.h"
-#include "polly/DeLICM.h"
-#include "polly/DeadCodeElimination.h"
 #include "polly/DependenceInfo.h"
-#include "polly/ForwardOpTree.h"
-#include "polly/JSONExporter.h"
-#include "polly/MaximalStaticExpansion.h"
 #include "polly/Options.h"
 #include "polly/Pass/PollyFunctionPass.h"
-#include "polly/PruneUnprofitable.h"
-#include "polly/ScheduleOptimizer.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopGraphPrinter.h"
 #include "polly/ScopInfo.h"
 #include "polly/ScopInliner.h"
-#include "polly/Simplify.h"
 #include "polly/Support/DumpFunctionPass.h"
 #include "polly/Support/DumpModulePass.h"
-#include "polly/Test/ArrayFusion.h"
-#include "polly/Test/ArrayReg2Mem.h"
-#include "polly/Test/CheckParallelism.h"
-#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/FunctionMarkedInliner.h"
-#include "polly/Test/FunctionPassTest.h"
-#include "polly/Test/FunctionScopInliner.h"
-#include "polly/Test/LoopFusion.h"
 #include "polly/Test/MarkFunctionToFindScop.h"
-#include "polly/Test/ModulePassTest.h"
-#include "polly/Test/PrintParamsValue.h"
-#include "polly/Test/RemoveLoopBoundCondition.h"
-#include "polly/Test/RemoveLoopVersioning.h"
-#include "polly/Test/ScheduleOptimizer.h"
-#include "polly/Test/TriangularLoopFix.h"
-#include "polly/Test/UserAssumptions.h"
-#include "polly/Test/VarFusion.h"
 #include "llvm/Analysis/CFGPrinter.h"
 #include "llvm/Config/llvm-config.h" // for LLVM_VERSION_STRING
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
-#include "llvm/Transforms/InstCombine/InstCombine.h"
-#include "llvm/Transforms/Scalar/ADCE.h"
-#include "llvm/Transforms/Scalar/ConstraintElimination.h"
-#include "llvm/Transforms/Scalar/DCE.h"
-#include "llvm/Transforms/Scalar/IndVarSimplify.h"
-#include "llvm/Transforms/Scalar/LoopRotation.h"
-#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 
 using namespace llvm;
 using namespace polly;
@@ -495,124 +460,12 @@ parsePollyCustomOptions(StringRef Params) {
 static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
-  PM.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
-  // PM.addPass(CodePreparationPass());
-  PM.addPass(ExtractAnnotatedFromLoop());
-  PM.addPass(VarFusionPass());
-  PM.addPass(UserAssumptions());
-  PM.addPass(SimplifyCFGPass());
-  PM.addPass(ConstraintEliminationPass());
-  PM.addPass(createFunctionToLoopPassAdaptor(IndVarSimplifyPass()));
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(RemoveLoopVersioningPass());
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(RemoveLoopBoundConditionPass());
-  PM.addPass(InstCombinePass());
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(LoopFusionPass());
-  PM.addPass(InstCombinePass());
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(TriangularLoopFixPass());
-  PM.addPass(InstCombinePass());
-  PM.addPass(SimplifyCFGPass());
-
-  PM.addPass(ArrayFusion());
-  PM.addPass(InstCombinePass());
-  PM.addPass(ArrayReg2MemPass());
-  PM.addPass(ADCEPass());
-
-  PM.addPass(PrintParamsValuePass());
-
   PassBuilder PB;
-
-  // <<<<<<< HEAD
-  //   // TODO add utility passes for the various command line options, once
-  //   they're
-  //   // ported
-  //
-  //   if (PollyDetectOnly) {
-  //     // Don't add more passes other than the ScopPassManager's detection
-  //     PM.addPass(createFunctionToScopPassAdaptor(std::move(SPM)));
-  //     return;
-  //   }
-  //
-  //   if (PollyViewer)
-  //     PM.addPass(ScopViewer());
-  //   if (PollyOnlyViewer)
-  //     PM.addPass(ScopOnlyViewer());
-  //   if (PollyPrinter)
-  //     PM.addPass(ScopPrinter());
-  //   if (PollyOnlyPrinter)
-  //     PM.addPass(ScopOnlyPrinter());
-  //   if (EnableSimplify)
-  //     SPM.addPass(SimplifyPass(0));
-  //   if (EnableForwardOpTree)
-  //     SPM.addPass(ForwardOpTreePass());
-  //   if (EnableDeLICM)
-  //     SPM.addPass(DeLICMPass());
-  //   if (EnableSimplify)
-  //     SPM.addPass(SimplifyPass(1));
-  //
-  //   if (ImportJScop)
-  //     SPM.addPass(JSONImportPass());
-  //
-  //   if (DeadCodeElim)
-  //     SPM.addPass(DeadCodeElimPass());
-  //
-  //   if (FullyIndexedStaticExpansion)
-  //     SPM.addPass(MaximalStaticExpansionPass());
-  //
-  //   if (EnablePruneUnprofitable)
-  //     SPM.addPass(PruneUnprofitablePass());
-  //
-  //   if (KokkosCheckParallelism) {
-  //     SPM.addPass(CheckParallelismPass());
-  //   }
-  //
-  //   switch (Optimizer) {
-  //   case OPTIMIZER_NONE:
-  //     break; /* Do nothing */
-  //   case OPTIMIZER_ISL:
-  //     SPM.addPass(IslScheduleOptimizerPass());
-  //     break;
-  //   case OPTIMIZER_PLUTO:
-  //     SPM.addPass(PlutoScheduleOptimizerPass());
-  //     break;
-  //   }
-  //
-  //   if (ExportJScop)
-  //     SPM.addPass(JSONExportPass());
-  //
-  //   if (!EnableForOpt)
-  //     return;
-  //
-  //   switch (CodeGeneration) {
-  //   case CODEGEN_AST:
-  //     SPM.addPass(
-  //         llvm::RequireAnalysisPass<IslAstAnalysis, Scop,
-  //         ScopAnalysisManager,
-  //                                   ScopStandardAnalysisResults &,
-  //                                   SPMUpdater &>());
-  //     break;
-  //   case CODEGEN_FULL:
-  //     SPM.addPass(CodeGenerationPass());
-  //     break;
-  //   case CODEGEN_NONE:
-  //     break;
-  //   }
-  //
-  //   PM.addPass(createFunctionToScopPassAdaptor(std::move(SPM)));
-  // =======
   ExitOnError Err("Inconsistent Polly configuration: ");
   PollyPassOptions &&Opts =
       Err(parsePollyOptions(StringRef(), /*IsCustom=*/false));
   PM.addPass(PollyFunctionPass(Opts));
 
-  // >>>>>>> upstream/main
   PM.addPass(PB.buildFunctionSimplificationPipeline(
       Level, llvm::ThinOrFullLTOPhase::None)); // Cleanup
 

@@ -25,13 +25,31 @@
 #include "polly/ScopInfo.h"
 #include "polly/Simplify.h"
 #include "polly/Support/PollyDebug.h"
+#include "polly/Test/ArrayFusion.h"
+#include "polly/Test/ArrayReg2Mem.h"
+#include "polly/Test/LoopFusion.h"
+#include "polly/Test/PrintParamsValue.h"
+#include "polly/Test/RemoveLoopBoundCondition.h"
+#include "polly/Test/RemoveLoopVersioning.h"
 #include "polly/Test/ScheduleOptimizer.h"
+#include "polly/Test/TriangularLoopFix.h"
+#include "polly/Test/UserAssumptions.h"
+#include "polly/Test/VarFusion.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
+#include "llvm/Transforms/Scalar/ConstraintElimination.h"
+#include "llvm/Transforms/Scalar/IndVarSimplify.h"
+#include "llvm/Transforms/Scalar/LoopPassManager.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Utils/LoopUtils.h"
 
 #define DEBUG_TYPE "polly-pass"
 
@@ -81,6 +99,10 @@ public:
     // TODO: Setting ModifiedIR will invalidate any analysis, even if DT, LI are
     // preserved.
     if (Opts.isPhaseEnabled(PassPhase::Prepare)) {
+
+      auto PA = createFunctionToLoopPassAdaptor(LoopRotatePass()).run(F, FAM);
+      FAM.invalidate(F, PA);
+
       if (runCodePreparation(F, &DT, &LI, nullptr)) {
         PreservedAnalyses PA;
         PA.preserve<DominatorTreeAnalysis>();
@@ -88,6 +110,59 @@ public:
         FAM.invalidate(F, PA);
         ModifiedIR = true;
       }
+
+      PA = ExtractAnnotatedFromLoop().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = VarFusionPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = UserAssumptions().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = ConstraintEliminationPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = createFunctionToLoopPassAdaptor(IndVarSimplifyPass()).run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = RemoveLoopVersioningPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = RemoveLoopBoundConditionPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = LoopFusionPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = TriangularLoopFixPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = ArrayFusion().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = ArrayReg2MemPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = ADCEPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = PrintParamsValuePass().run(F, FAM);
+      FAM.invalidate(F, PA);
     }
 
     // Can't do anything without detection
@@ -104,9 +179,19 @@ public:
     RegionInfo RI = RegionInfoAnalysis().run(F, FAM);
     auto AnnotedSizes = ExtractAnnotatedSizes().run(F, FAM);
 
+    LoopInfo &LI2 = FAM.getResult<LoopAnalysis>(F);
+    DominatorTree &DT2 = FAM.getResult<DominatorTreeAnalysis>(F);
+
     // Phase: detection
-    ScopDetection SD(DT, SE, LI, RI, AA, AnnotedSizes, ORE);
-    SD.detect(F);
+    ScopDetection SD(DT2, SE, LI2, RI, AA, AnnotedSizes, ORE);
+
+    if (not Opts.isPhaseEnabled(PassPhase::Detection) or
+        (Opts.isPhaseEnabled(PassPhase::Detection) and
+         (F.getMetadata("polly") or F.hasFnAttribute("polly.findSCoP")))) {
+      errs() << "on fait la recherche des scop dans " << F.getName() << "\n";
+      SD.detect(F);
+    }
+
     if (Opts.isPhaseEnabled(PassPhase::PrintDetect)) {
       outs() << "Detected Scops in Function " << F.getName() << "\n";
       for (const Region *R : SD.ValidRegions)
@@ -134,7 +219,7 @@ public:
     // Phase: scops
     AssumptionCache &AC = FAM.getResult<AssumptionAnalysis>(F);
     const DataLayout &DL = F.getParent()->getDataLayout();
-    ScopInfo Info(DL, SD, SE, LI, AA, DT, AC, ORE);
+    ScopInfo Info(DL, SD, SE, LI, AA, DT2, AC, ORE);
     if (Opts.isPhaseEnabled(PassPhase::PrintScopInfo)) {
       if (Region *TLR = RI.getTopLevelRegion()) {
         SmallVector<Region *> Regions;

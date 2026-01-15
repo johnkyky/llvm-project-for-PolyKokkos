@@ -404,10 +404,10 @@ RemoveLoopBoundConditionPass::run(Function &F, FunctionAnalysisManager &AM) {
   LLVM_DEBUG(errs() << "RemoveLoopBoundConditionPass pass run on "
                     << F.getName() << "\n";);
 
-  auto &LBA = AM.getResult<LoopBoundAnalysis>(F);
+  auto LBA = LoopBoundAnalysis().run(F, AM);
   LLVM_DEBUG(errs() << LBA << "\n";);
   removeLoopBoundConditions(F, LBA);
-  auto &AC = AM.getResult<AssumptionAnalysis>(F);
+  auto AC = AssumptionAnalysis().run(F, AM);
   removeLoopBoundVarConditions(F, AC);
 
   if (verifyFunction(F, &errs())) {

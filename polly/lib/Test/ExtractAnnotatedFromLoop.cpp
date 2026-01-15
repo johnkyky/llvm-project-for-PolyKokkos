@@ -568,7 +568,7 @@ PreservedAnalyses ExtractAnnotatedFromLoop::run(Function &F,
   LoopInfo &LI = FM.getResult<LoopAnalysis>(F);
   auto &DT = FM.getResult<DominatorTreeAnalysis>(F);
 
-  errs() << FM.getResult<ExtractAnnotatedSizes>(F) << "\n";
+  errs() << ExtractAnnotatedSizes().run(F, FM) << "\n";
 
   readBackend(F);
   extractLoopBoundAnnotation(F, LI, DT);

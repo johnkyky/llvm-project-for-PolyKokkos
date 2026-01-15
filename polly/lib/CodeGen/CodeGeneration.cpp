@@ -325,5 +325,9 @@ static bool generateCode(Scop &S, IslAstInfo &AI, LoopInfo &LI,
 }
 
 bool polly::runCodeGeneration(Scop &S, RegionInfo &RI, IslAstInfo &AI) {
+  errs() << "Shedule \n";
+  errs() << S.getSchedule() << "\n";
+  errs() << S.getScheduleTree() << "\n";
+  AI.print(errs());
   return generateCode(S, AI, *S.getLI(), *S.getDT(), *S.getSE(), RI);
 }

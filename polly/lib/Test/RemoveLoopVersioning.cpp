@@ -37,13 +37,13 @@ using namespace polly;
 
 namespace {
 
-bool isLoopBoundCondition(Value *Val, LoopInfo &LI, DominatorTree &DT,
-                          PostDominatorTree &PDT) {
+bool isLoopBoundCondition(BranchInst *Branch, Value *Val, LoopInfo &LI,
+                          DominatorTree &DT, PostDominatorTree &PDT) {
   auto *ValInst = dyn_cast<Instruction>(Val);
   auto *FissionBlock = ValInst->getParent();
   Instruction *Term = FissionBlock->getTerminator();
-  BasicBlock *Succ0 = Term->getSuccessor(0);
-  BasicBlock *Succ1 = Term->getSuccessor(1);
+  BasicBlock *Succ0 = Branch->getParent()->getTerminator()->getSuccessor(0);
+  BasicBlock *Succ1 = Branch->getParent()->getTerminator()->getSuccessor(1);
   BasicBlock *FusionBlock = PDT.findNearestCommonDominator(Succ0, Succ1);
 
   if (Succ0 == FusionBlock || Succ1 == FusionBlock) {
@@ -253,7 +253,7 @@ bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
       return false;
     }
 
-    if (not isLoopBoundCondition(VariableOp, LI, DT, PDT)) {
+    if (not isLoopBoundCondition(Branch, VariableOp, LI, DT, PDT)) {
       errs() << "Variable operand is not from a loop bound, skipping\n";
       return false;
     }

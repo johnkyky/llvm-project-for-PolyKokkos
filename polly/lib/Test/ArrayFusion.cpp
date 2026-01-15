@@ -98,9 +98,10 @@ PreservedAnalyses ArrayFusion::run(Function &F, FunctionAnalysisManager &AM) {
 
   LLVM_DEBUG(errs() << "ArrayFusion pass run on " << F.getName() << "\n");
 
-  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto DT = DominatorTreeAnalysis().run(F, AM);
   DT.recalculate(F);
-  sameArraysFusion(F, AM.getResult<ExtractAnnotatedSizes>(F), DT);
+  auto Anno = ExtractAnnotatedSizes().run(F, AM);
+  sameArraysFusion(F, Anno, DT);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
