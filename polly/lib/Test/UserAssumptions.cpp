@@ -13,6 +13,7 @@
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/VarFusion.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"

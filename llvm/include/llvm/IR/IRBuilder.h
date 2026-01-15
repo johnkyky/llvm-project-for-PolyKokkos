@@ -48,12 +48,6 @@
 #include <optional>
 #include <utility>
 
-// cppoly begin
-#include <map>
-#include <set>
-#include <vector>
-// cppoly end
-
 namespace llvm {
 
 class APInt;
@@ -154,10 +148,6 @@ protected:
   LLVMContext &Context;
   const IRBuilderFolder &Folder;
   const IRBuilderDefaultInserter &Inserter;
-
-  // cppoly begin
-  SmallVector<std::pair<unsigned, MDNode *>, 8> CurMetaInfo;
-  // cppoly end
 
   MDNode *DefaultFPMathTag;
   FastMathFlags FMF;
@@ -290,21 +280,6 @@ public:
       I->setMetadata(KV.first, KV.second);
     SetInstDebugLocation(I);
   }
-
-  // cppoly begin
-  void AddCurrentMetadata(unsigned mk, MDNode *node) {
-    CurMetaInfo.push_back(std::make_pair(mk, node));
-  }
-
-  void RemoveCurrentMetadata(unsigned mk, MDNode *node) {
-    auto cp = std::make_pair(mk, node);
-
-    auto search = std::find(CurMetaInfo.begin(), CurMetaInfo.end(), cp);
-    if (search != CurMetaInfo.end()) {
-      CurMetaInfo.erase(search);
-    }
-  }
-  // cppoly end
 
   /// Get the return type of the current function that we're emitting
   /// into.

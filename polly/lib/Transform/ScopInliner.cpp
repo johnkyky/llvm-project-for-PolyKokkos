@@ -16,6 +16,7 @@
 #include "polly/ScopInliner.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInliner.h"
+#include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -67,8 +68,9 @@ template <typename SCC_t> bool runScopInlinerImpl(Function *F, SCC_t &SCC) {
   auto &LI = FAM.getResult<LoopAnalysis>(*F);
   auto &RI = FAM.getResult<RegionInfoAnalysis>(*F);
   auto &AA = FAM.getResult<AAManager>(*F);
+  auto &AnnotedSizes = FAM.getResult<ExtractAnnotatedSizes>(*F);
   auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(*F);
-  ScopDetection SD(DT, SE, LI, RI, AA, ORE);
+  ScopDetection SD(DT, SE, LI, RI, AA, AnnotedSizes, ORE);
   SD.detect(*F);
 
   const bool HasScopAsTopLevelRegion =

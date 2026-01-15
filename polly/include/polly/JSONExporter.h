@@ -10,8 +10,14 @@
 #define POLLY_JSONEXPORTER_H
 
 #include "polly/DependenceInfo.h"
+#include "llvm/IR/Function.h"
+
+using namespace llvm;
 
 namespace polly {
+
+std::string getFileName(Function &F, StringRef Suffix, StringRef Extension);
+std::string getFileName(Scop &S, StringRef Suffix, StringRef Extension);
 
 /// This pass imports a scop from a jscop file. The filename is deduced from the
 /// concatenation of the function and scop name.

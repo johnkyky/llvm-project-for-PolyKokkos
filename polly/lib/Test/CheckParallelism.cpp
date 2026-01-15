@@ -106,9 +106,11 @@ PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
   LLVM_DEBUG(errs() << "CheckParallelismPass pass run on " << S.getName()
                     << "\n");
 
-  auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
+  // auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
+  DependenceAnalysis::Result DA = runDependenceAnalysis(S);
+  auto IAA = runIslAstGen(S, DA);
 
-  IslAst &Ast = AI.getIslAst();
+  IslAst &Ast = IAA->getIslAst();
   isl::ast_node AstRoot = Ast.getAst();
 
   if (AstRoot.is_null()) {

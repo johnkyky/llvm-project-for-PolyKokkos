@@ -75,6 +75,47 @@ void saveToFile(const std::string &Filename, const std::string &Content) {
 }
 } // namespace
 
+void polly::runPlutoScheduleOptimizer(Scop &S) {
+  LLVM_DEBUG(errs() << "PlutoScheduleOptimizerPass run on " << S.getName()
+                    << "\n");
+
+  std::string FileNameInput = "./" + getFileName(S, "_input", "scop");
+
+  OpenSCoPExportPass::exportOpenScop(S, FileNameInput);
+
+  LLVM_DEBUG(errs() << "Calling pluto on the file " << FileNameInput << "\n");
+
+  if (PlutoPath.empty()) {
+    std::string CopyCommand =
+        "docker cp " + FileNameInput + " pluto_container:/home/";
+    LLVM_DEBUG(errs() << "CopyCommand: " << CopyCommand << "\n");
+    std::system(CopyCommand.c_str());
+  }
+  std::string RunPlutoCommand;
+
+  if (PlutoPath.empty()) {
+    RunPlutoCommand = "docker exec pluto_container sh -c \"cat /home/" +
+                      FileNameInput + " | pluto " + PlutoArguments +
+                      " --readscop stdin -o stdout\"";
+  } else {
+    RunPlutoCommand = "cat ./" + FileNameInput + " | " + PlutoPath + " " +
+                      PlutoArguments + " --readscop stdin -o stdout";
+  }
+  LLVM_DEBUG(errs() << "RunPlutoCommand: " << RunPlutoCommand << "\n");
+  auto ResultPluto = exec(RunPlutoCommand.c_str());
+
+  LLVM_DEBUG(errs() << "Result of pluto:\n" << ResultPluto << "\n");
+
+  std::string NewScopExtracted = extractOpenScopFromString(ResultPluto);
+
+  std::string FileNameOutput = getFileName(S, "_output", "scop");
+  saveToFile(FileNameOutput, NewScopExtracted);
+
+  OpenSCoPImportPass::importOpenScop(S, FileNameOutput, FileNameInput);
+
+  LLVM_DEBUG(errs() << "PlutoScheduleOptimizerPass done\n");
+}
+
 PreservedAnalyses
 PlutoScheduleOptimizerPass::run(Scop &S, ScopAnalysisManager &SAM,
                                 ScopStandardAnalysisResults &SAR,

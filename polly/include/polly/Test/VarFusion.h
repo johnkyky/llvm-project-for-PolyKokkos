@@ -9,6 +9,7 @@
 #ifndef POLLY_VARFUSION_H
 #define POLLY_VARFUSION_H
 
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
 

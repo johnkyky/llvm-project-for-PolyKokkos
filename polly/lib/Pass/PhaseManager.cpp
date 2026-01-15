@@ -25,11 +25,13 @@
 #include "polly/ScopInfo.h"
 #include "polly/Simplify.h"
 #include "polly/Support/PollyDebug.h"
+#include "polly/Test/ScheduleOptimizer.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "polly-pass"
 
@@ -100,9 +102,10 @@ public:
     // ScopDetection is modifying RegionInfo, do not cache it, nor use a cached
     // version.
     RegionInfo RI = RegionInfoAnalysis().run(F, FAM);
+    auto AnnotedSizes = ExtractAnnotatedSizes().run(F, FAM);
 
     // Phase: detection
-    ScopDetection SD(DT, SE, LI, RI, AA, ORE);
+    ScopDetection SD(DT, SE, LI, RI, AA, AnnotedSizes, ORE);
     SD.detect(F);
     if (Opts.isPhaseEnabled(PassPhase::PrintDetect)) {
       outs() << "Detected Scops in Function " << F.getName() << "\n";
@@ -231,6 +234,8 @@ public:
       // Phase: opt-isl
       if (Opts.isPhaseEnabled(PassPhase::Optimization))
         runIslScheduleOptimizer(*S, &TTI, DA);
+      if (Opts.isPhaseEnabled(PassPhase::OptimizationPluto))
+        runPlutoScheduleOptimizer(*S);
 
       // Phase: import-jscop
       if (Opts.isPhaseEnabled(PassPhase::ExportJScop))
@@ -305,6 +310,8 @@ StringRef polly::getPhaseName(PassPhase Phase) {
     return "prune";
   case PassPhase::Optimization:
     return "opt-isl"; // "opt" would conflict with the llvm executable
+  case PassPhase::OptimizationPluto:
+    return "opt-pluto"; // "opt" would conflict with the llvm executable
   case PassPhase::ExportJScop:
     return "export-jscop";
   case PassPhase::AstGen:
@@ -339,6 +346,7 @@ PassPhase polly::parsePhase(StringRef Name) {
       .Case("mse", PassPhase::MaximumStaticExtension)
       .Case("prune", PassPhase::PruneUnprofitable)
       .Case("opt-isl", PassPhase::Optimization)
+      .Case("opt-isl", PassPhase::OptimizationPluto)
       .Case("export-jscop", PassPhase::ExportJScop)
       .Case("ast", PassPhase::AstGen)
       .Case("codegen", PassPhase::CodeGen)

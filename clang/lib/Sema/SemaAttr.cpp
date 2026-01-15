@@ -393,26 +393,26 @@ void Sema::ActOnPragmaClangSection(SourceLocation PragmaLoc,
   PragmaClangSection *CSec;
   int SectionFlags = ASTContext::PSF_Read;
   switch (SecKind) {
-    case PragmaClangSectionKind::BSS:
-      CSec = &PragmaClangBSSSection;
-      SectionFlags |= ASTContext::PSF_Write | ASTContext::PSF_ZeroInit;
-      break;
-    case PragmaClangSectionKind::Data:
-      CSec = &PragmaClangDataSection;
-      SectionFlags |= ASTContext::PSF_Write;
-      break;
-    case PragmaClangSectionKind::Rodata:
-      CSec = &PragmaClangRodataSection;
-      break;
-    case PragmaClangSectionKind::Relro:
-      CSec = &PragmaClangRelroSection;
-      break;
-    case PragmaClangSectionKind::Text:
-      CSec = &PragmaClangTextSection;
-      SectionFlags |= ASTContext::PSF_Execute;
-      break;
-    default:
-      llvm_unreachable("invalid clang section kind");
+  case PragmaClangSectionKind::BSS:
+    CSec = &PragmaClangBSSSection;
+    SectionFlags |= ASTContext::PSF_Write | ASTContext::PSF_ZeroInit;
+    break;
+  case PragmaClangSectionKind::Data:
+    CSec = &PragmaClangDataSection;
+    SectionFlags |= ASTContext::PSF_Write;
+    break;
+  case PragmaClangSectionKind::Rodata:
+    CSec = &PragmaClangRodataSection;
+    break;
+  case PragmaClangSectionKind::Relro:
+    CSec = &PragmaClangRelroSection;
+    break;
+  case PragmaClangSectionKind::Text:
+    CSec = &PragmaClangTextSection;
+    SectionFlags |= ASTContext::PSF_Execute;
+    break;
+  default:
+    llvm_unreachable("invalid clang section kind");
   }
 
   if (Action == PragmaClangSectionAction::Clear) {
@@ -819,8 +819,7 @@ bool Sema::UnifySection(StringRef SectionName, int SectionFlags,
   return true;
 }
 
-bool Sema::UnifySection(StringRef SectionName,
-                        int SectionFlags,
+bool Sema::UnifySection(StringRef SectionName, int SectionFlags,
                         SourceLocation PragmaSectionLocation) {
   auto SectionIt = Context.SectionInfos.find(SectionName);
   if (SectionIt != Context.SectionInfos.end()) {
@@ -850,14 +849,14 @@ void Sema::ActOnPragmaMSSeg(SourceLocation PragmaLocation,
                             StringLiteral *SegmentName,
                             llvm::StringRef PragmaName) {
   PragmaStack<StringLiteral *> *Stack =
-    llvm::StringSwitch<PragmaStack<StringLiteral *> *>(PragmaName)
-        .Case("data_seg", &DataSegStack)
-        .Case("bss_seg", &BSSSegStack)
-        .Case("const_seg", &ConstSegStack)
-        .Case("code_seg", &CodeSegStack);
+      llvm::StringSwitch<PragmaStack<StringLiteral *> *>(PragmaName)
+          .Case("data_seg", &DataSegStack)
+          .Case("bss_seg", &BSSSegStack)
+          .Case("const_seg", &ConstSegStack)
+          .Case("code_seg", &CodeSegStack);
   if (Action & PSK_Pop && Stack->Stack.empty())
-    Diag(PragmaLocation, diag::warn_pragma_pop_failed) << PragmaName
-        << "stack empty";
+    Diag(PragmaLocation, diag::warn_pragma_pop_failed)
+        << PragmaName << "stack empty";
   if (SegmentName) {
     if (!checkSectionName(SegmentName->getBeginLoc(), SegmentName->getString()))
       return;
@@ -882,8 +881,8 @@ void Sema::ActOnPragmaMSStrictGuardStackCheck(SourceLocation PragmaLocation,
 }
 
 /// Called on well formed \#pragma bss_seg().
-void Sema::ActOnPragmaMSSection(SourceLocation PragmaLocation,
-                                int SectionFlags, StringLiteral *SegmentName) {
+void Sema::ActOnPragmaMSSection(SourceLocation PragmaLocation, int SectionFlags,
+                                StringLiteral *SegmentName) {
   UnifySection(SegmentName->getString(), SectionFlags, PragmaLocation);
 }
 
@@ -941,14 +940,14 @@ void Sema::ActOnPragmaUnused(const Token &IdTok, Scope *curScope,
 
   if (Lookup.empty()) {
     Diag(PragmaLoc, diag::warn_pragma_unused_undeclared_var)
-      << Name << SourceRange(IdTok.getLocation());
+        << Name << SourceRange(IdTok.getLocation());
     return;
   }
 
   VarDecl *VD = Lookup.getAsSingle<VarDecl>();
   if (!VD) {
     Diag(PragmaLoc, diag::warn_pragma_unused_expected_var_arg)
-      << Name << SourceRange(IdTok.getLocation());
+        << Name << SourceRange(IdTok.getLocation());
     return;
   }
 
@@ -1249,7 +1248,7 @@ void Sema::DiagnoseUnterminatedPragmaAttribute() {
 }
 
 void Sema::ActOnPragmaOptimize(bool On, SourceLocation PragmaLoc) {
-  if(On)
+  if (On)
     OptimizeOffPragmaLocation = SourceLocation();
   else
     OptimizeOffPragmaLocation = PragmaLoc;
@@ -1277,7 +1276,7 @@ void Sema::ActOnPragmaMSFunction(
 void Sema::AddRangeBasedOptnone(FunctionDecl *FD) {
   // In the future, check other pragmas if they're implemented (e.g. pragma
   // optimize 0 will probably map to this functionality too).
-  if(OptimizeOffPragmaLocation.isValid())
+  if (OptimizeOffPragmaLocation.isValid())
     AddOptnoneAttributeIfNoConflicts(FD, OptimizeOffPragmaLocation);
 }
 
@@ -1327,7 +1326,7 @@ void Sema::AddImplicitMSFunctionNoBuiltinAttr(FunctionDecl *FD) {
     FD->addAttr(NoBuiltinAttr::CreateImplicit(Context, V.data(), V.size()));
 }
 
-typedef std::vector<std::pair<unsigned, SourceLocation> > VisStack;
+typedef std::vector<std::pair<unsigned, SourceLocation>> VisStack;
 enum : unsigned { NoVisibility = ~0U };
 
 void Sema::AddPushedVisibilityAttribute(Decl *D) {
@@ -1338,19 +1337,19 @@ void Sema::AddPushedVisibilityAttribute(Decl *D) {
   if (ND && ND->getExplicitVisibility(NamedDecl::VisibilityForValue))
     return;
 
-  VisStack *Stack = static_cast<VisStack*>(VisContext);
+  VisStack *Stack = static_cast<VisStack *>(VisContext);
   unsigned rawType = Stack->back().first;
-  if (rawType == NoVisibility) return;
+  if (rawType == NoVisibility)
+    return;
 
-  VisibilityAttr::VisibilityType type
-    = (VisibilityAttr::VisibilityType) rawType;
+  VisibilityAttr::VisibilityType type = (VisibilityAttr::VisibilityType)rawType;
   SourceLocation loc = Stack->back().second;
 
   D->addAttr(VisibilityAttr::CreateImplicit(Context, type, loc));
 }
 
 void Sema::FreeVisContext() {
-  delete static_cast<VisStack*>(VisContext);
+  delete static_cast<VisStack *>(VisContext);
   VisContext = nullptr;
 }
 
@@ -1359,11 +1358,11 @@ static void PushPragmaVisibility(Sema &S, unsigned type, SourceLocation loc) {
   if (!S.VisContext)
     S.VisContext = new VisStack;
 
-  VisStack *Stack = static_cast<VisStack*>(S.VisContext);
+  VisStack *Stack = static_cast<VisStack *>(S.VisContext);
   Stack->push_back(std::make_pair(type, loc));
 }
 
-void Sema::ActOnPragmaVisibility(const IdentifierInfo* VisType,
+void Sema::ActOnPragmaVisibility(const IdentifierInfo *VisType,
                                  SourceLocation PragmaLoc) {
   if (VisType) {
     // Compute visibility to use.
@@ -1493,7 +1492,7 @@ void Sema::PopPragmaVisibility(bool IsNamespaceEnd, SourceLocation EndLoc) {
   }
 
   // Pop visibility from stack
-  VisStack *Stack = static_cast<VisStack*>(VisContext);
+  VisStack *Stack = static_cast<VisStack *>(VisContext);
 
   const std::pair<unsigned, SourceLocation> *Back = &Stack->back();
   bool StartsWithPragma = Back->first != NoVisibility;
@@ -1575,15 +1574,3 @@ bool Sema::checkCommonAttributeFeatures(const Stmt *S, const ParsedAttr &A,
                                         bool SkipArgCountCheck) {
   return ::checkCommonAttributeFeatures(*this, S, A, SkipArgCountCheck);
 }
-
-// cppoly begin
-void Sema::ActOnPragmaCPPoly(std::vector<StringRef> pragma,
-           SourceLocation Loc) {
-  Context.addCPPolyKeywords(Loc, pragma);
-}
-
-void Sema::ActOnPragmaCPPolyUpdate(const SourceLocation& prevLoc,
-           const SourceLocation& newLoc) {
-  Context.updateCPPolyKeywords(prevLoc, newLoc);
-}
-// cppoly end

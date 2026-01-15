@@ -18,6 +18,7 @@
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/ScopLocation.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/ToolOutputFile.h"

@@ -311,6 +311,11 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
     break;
   case OPTIMIZER_ISL:
     // default: enabled
+    PassEnabled[static_cast<size_t>(PassPhase::OptimizationPluto)] = false;
+    break;
+  case OPTIMIZER_PLUTO:
+    PassEnabled[static_cast<size_t>(PassPhase::Optimization)] = false;
+    PassEnabled[static_cast<size_t>(PassPhase::OptimizationPluto)] = true;
     break;
   }
   if (ExportJScop)
@@ -491,7 +496,7 @@ static void buildCommonPollyPipeline(FunctionPassManager &PM,
                                      OptimizationLevel Level,
                                      bool EnableForOpt) {
   PM.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
-  PM.addPass(CodePreparationPass());
+  // PM.addPass(CodePreparationPass());
   PM.addPass(ExtractAnnotatedFromLoop());
   PM.addPass(VarFusionPass());
   PM.addPass(UserAssumptions());

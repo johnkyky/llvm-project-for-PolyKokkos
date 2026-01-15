@@ -189,7 +189,8 @@ void transformTriangularLoops(Loop *L, PeelResult PeelRes, LoopInfo &LI,
   bool IsDone = false;
 
   if (PeelRes.Direction == PeelDirection::FRONT)
-    IsDone = peelLoop(L, PeelRes.getIntValue(), &LI, &SE, DT, &AC, false, VMap);
+    IsDone = peelLoop(L, PeelRes.getIntValue(), false, &LI, &SE, DT, &AC, false,
+                      VMap);
   else if (PeelRes.Direction == PeelDirection::BACK) {
     llvm_unreachable("Not implemented yet");
     // IsDone = peelLoop(L, PeelRes.getIntValue(), &LI, &SE, DT, &AC, VMap);

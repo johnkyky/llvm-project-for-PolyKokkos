@@ -15,6 +15,8 @@ using namespace llvm;
 
 namespace polly {
 
+void runPlutoScheduleOptimizer(Scop &S);
+
 struct PlutoScheduleOptimizerPass final
     : PassInfoMixin<PlutoScheduleOptimizerPass> {
   llvm::PreservedAnalyses run(Scop &S, ScopAnalysisManager &SAM,

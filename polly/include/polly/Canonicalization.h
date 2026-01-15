@@ -24,11 +24,6 @@ llvm::FunctionPassManager
 buildCanonicalicationPassesForNPM(llvm::ModulePassManager &MPM,
                                   llvm::OptimizationLevel Level);
 
-struct PollyCanonicalizeRewrite final
-    : PassInfoMixin<PollyCanonicalizeRewrite> {
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-};
-
 } // namespace polly
 
 #endif

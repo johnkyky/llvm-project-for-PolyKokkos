@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ModulePassTest.h"
+#include "llvm/IR/Module.h"
 
 using namespace polly;
 

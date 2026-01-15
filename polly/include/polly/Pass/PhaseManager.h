@@ -58,6 +58,7 @@ enum class PassPhase {
   MaximumStaticExtension,
   PruneUnprofitable,
   Optimization,
+  OptimizationPluto,
   ExportJScop,
   AstGen,
   CodeGen,
