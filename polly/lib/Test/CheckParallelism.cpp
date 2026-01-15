@@ -93,29 +93,26 @@ bool visite(__isl_take isl_ast_node *Node, Scop &S, unsigned Depth) {
 
 } // namespace
 
-PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
-                                            ScopStandardAnalysisResults &AR,
-                                            SPMUpdater &) {
+bool polly::runCheckParallelism(Scop &S) {
   if (S.getBackend() == Scop::BackendTy::Undefined)
     report_fatal_error("CheckParallelismPass: Scop has no backend\n");
   if (S.getBackend() == Scop::BackendTy::Serial) {
     errs() << "CheckParallelismPass: Scop has Serial backend\n";
-    return PreservedAnalyses::all();
+    return false;
   }
 
   LLVM_DEBUG(errs() << "CheckParallelismPass pass run on " << S.getName()
                     << "\n");
 
-  // auto &AI = SAM.getResult<IslAstAnalysis>(S, AR);
   DependenceAnalysis::Result DA = runDependenceAnalysis(S);
-  auto IAA = runIslAstGen(S, DA);
+  auto IA = runIslAstGen(S, DA);
 
-  IslAst &Ast = IAA->getIslAst();
+  IslAst &Ast = IA->getIslAst();
   isl::ast_node AstRoot = Ast.getAst();
 
   if (AstRoot.is_null()) {
     LLVM_DEBUG(errs() << "CheckParallelismPass: AstRoot is null\n");
-    return PreservedAnalyses::all();
+    return false;
   }
 
   bool IsValid = true;
@@ -128,6 +125,15 @@ PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
                     << "\n");
 
   LLVM_DEBUG(errs() << "CheckParallelismPass pass done\n");
+
+  return true;
+}
+
+PreservedAnalyses CheckParallelismPass::run(Scop &S, ScopAnalysisManager &SAM,
+                                            ScopStandardAnalysisResults &AR,
+                                            SPMUpdater &) {
+  if (not runCheckParallelism(S))
+    return PreservedAnalyses::all();
 
   return PreservedAnalyses::none();
 }

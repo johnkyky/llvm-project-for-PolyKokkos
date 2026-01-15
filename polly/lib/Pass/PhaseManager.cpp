@@ -27,6 +27,7 @@
 #include "polly/Support/PollyDebug.h"
 #include "polly/Test/ArrayFusion.h"
 #include "polly/Test/ArrayReg2Mem.h"
+#include "polly/Test/CheckParallelism.h"
 #include "polly/Test/LoopFusion.h"
 #include "polly/Test/PrintParamsValue.h"
 #include "polly/Test/RemoveLoopBoundCondition.h"
@@ -316,6 +317,9 @@ public:
       if (Opts.isPhaseEnabled(PassPhase::PruneUnprofitable))
         runPruneUnprofitable(*S);
 
+      if (Opts.isPhaseEnabled(PassPhase::CheckParallelism))
+        runCheckParallelism(*S);
+
       // Phase: opt-isl
       if (Opts.isPhaseEnabled(PassPhase::Optimization))
         runIslScheduleOptimizer(*S, &TTI, DA);
@@ -393,6 +397,8 @@ StringRef polly::getPhaseName(PassPhase Phase) {
     return "mse";
   case PassPhase::PruneUnprofitable:
     return "prune";
+  case PassPhase::CheckParallelism:
+    return "check-parallelism";
   case PassPhase::Optimization:
     return "opt-isl"; // "opt" would conflict with the llvm executable
   case PassPhase::OptimizationPluto:
@@ -430,6 +436,7 @@ PassPhase polly::parsePhase(StringRef Name) {
       .Case("dce", PassPhase::DeadCodeElimination)
       .Case("mse", PassPhase::MaximumStaticExtension)
       .Case("prune", PassPhase::PruneUnprofitable)
+      .Case("check-parallelism", PassPhase::CheckParallelism)
       .Case("opt-isl", PassPhase::Optimization)
       .Case("opt-isl", PassPhase::OptimizationPluto)
       .Case("export-jscop", PassPhase::ExportJScop)

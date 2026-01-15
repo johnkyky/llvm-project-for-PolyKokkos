@@ -57,6 +57,7 @@ enum class PassPhase {
   DeadCodeElimination,
   MaximumStaticExtension,
   PruneUnprofitable,
+  CheckParallelism,
   Optimization,
   OptimizationPluto,
   ExportJScop,

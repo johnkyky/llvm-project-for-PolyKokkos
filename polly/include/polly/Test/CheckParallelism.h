@@ -16,6 +16,8 @@ using namespace llvm;
 
 namespace polly {
 
+bool runCheckParallelism(Scop &S);
+
 struct CheckParallelismPass final : PassInfoMixin<CheckParallelismPass> {
   PreservedAnalyses run(Scop &, ScopAnalysisManager &,
                         ScopStandardAnalysisResults &, SPMUpdater &);

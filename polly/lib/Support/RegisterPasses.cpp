@@ -39,6 +39,7 @@
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/GlobalDCE.h"
 
 using namespace llvm;
@@ -197,7 +198,7 @@ static cl::opt<bool> KokkosCheckParallelism(
     "polly-kokkos-check-parallelism",
     cl::desc("Check if kokkos parallel kernels are parallel as written in the "
              "code"),
-    cl::Hidden, cl::init(true), cl::cat(PollyCategory));
+    cl::Hidden, cl::init(false), cl::cat(PollyCategory));
 
 static cl::opt<bool>
     PollyPrintDetect("polly-print-detect",
@@ -269,6 +270,8 @@ static llvm::Expected<PollyPassOptions> parsePollyOptions(StringRef Params,
     PassEnabled[static_cast<size_t>(PassPhase::MaximumStaticExtension)] = true;
   if (!EnablePruneUnprofitable)
     PassEnabled[static_cast<size_t>(PassPhase::PruneUnprofitable)] = false;
+  if (KokkosCheckParallelism)
+    PassEnabled[static_cast<size_t>(PassPhase::CheckParallelism)] = true;
   switch (Optimizer) {
   case OPTIMIZER_NONE:
     // explicitly switched off
