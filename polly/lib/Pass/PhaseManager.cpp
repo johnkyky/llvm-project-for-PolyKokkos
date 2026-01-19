@@ -220,7 +220,7 @@ public:
     // Phase: scops
     AssumptionCache AC = AssumptionAnalysis().run(F, FAM);
     const DataLayout &DL = F.getParent()->getDataLayout();
-    ScopInfo Info(DL, SD, SE, LI, AA, DT2, AC, ORE);
+    ScopInfo Info(DL, SD, SE, LI2, AA, DT2, AC, ORE);
     if (Opts.isPhaseEnabled(PassPhase::PrintScopInfo)) {
       if (Region *TLR = RI.getTopLevelRegion()) {
         SmallVector<Region *> Regions;
