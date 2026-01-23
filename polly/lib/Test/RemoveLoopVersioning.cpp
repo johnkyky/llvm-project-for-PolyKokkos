@@ -163,62 +163,59 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
   if (!Terminator)
     return nullptr;
 
-  errs() << "\tgetVersionedLoop visiting terminator: " << *Terminator << "\n";
-
   Loop *BaseLoop = LI.getLoopFor(Fision);
   unsigned BaseDepth = BaseLoop ? BaseLoop->getLoopDepth() : 0;
-  errs() << "\tBase loop " << BaseDepth << " : "
-         << (BaseLoop ? BaseLoop->getName() : "null") << "\n";
 
-  Loop *CandidateLoop = nullptr;
-  unsigned MaxCandidateDepth = BaseDepth;
-  unsigned NumSucc = Terminator->getNumSuccessors();
-  for (unsigned I = 0; I < NumSucc; ++I) {
-    BasicBlock *Succ = Terminator->getSuccessor(I);
-    if (Succ == Fusion)
+  Loop *BestCandidate = nullptr;
+  unsigned MaxFoundDepth = BaseDepth;
+
+  for (unsigned I = 0; I < Terminator->getNumSuccessors(); ++I) {
+    BasicBlock *StartBB = Terminator->getSuccessor(I);
+
+    if (StartBB == Fusion)
       continue;
 
-    errs() << "\tChecking successor: " << Succ->getName() << "\n";
+    unsigned BranchMaxDepth = 0;
+    Loop *BranchDeepestLoop = nullptr;
 
-    bool BreakLoop = false;
-    while (LI.getLoopFor(Succ) == BaseLoop) {
-      Succ = Succ->getSingleSuccessor();
-      if (Succ == Fusion) {
-        errs() << "\t\tReached fusion block, stopping\n";
-        BreakLoop = true;
-        break;
-      }
-      if (!Succ) {
-        llvm_unreachable("No single successor found ?");
-      }
-      errs() << "\tFollowing to successor: " << Succ->getName() << "\n";
-    }
-    if (BreakLoop)
-      continue;
+    SmallVector<BasicBlock *, 16> Worklist;
+    SmallPtrSet<BasicBlock *, 32> Visited;
 
-    Loop *SuccLoop = LI.getLoopFor(Succ);
+    Worklist.push_back(StartBB);
+    Visited.insert(StartBB);
 
-    errs() << "\t\tSuccessor loop: "
-           << (SuccLoop ? SuccLoop->getName() : "null") << "\n";
+    while (!Worklist.empty()) {
+      BasicBlock *BB = Worklist.pop_back_val();
 
-    if (SuccLoop) {
-      unsigned SuccDepth = getMaxDepthRecursive(SuccLoop);
-      errs() << "\t\tSuccessor loop depth: " << SuccDepth << "\n";
-
-      if (SuccDepth > BaseDepth) {
-        if (SuccDepth > MaxCandidateDepth) {
-          MaxCandidateDepth = SuccDepth;
-          CandidateLoop = SuccLoop;
-        } else if (SuccDepth == MaxCandidateDepth) {
-          llvm_unreachable("Multiple candidate loops with same depth found, "
-                           "ambiguous versioned loop");
+      Loop *L = LI.getLoopFor(BB);
+      if (L) {
+        unsigned D = L->getLoopDepth();
+        if (D > BranchMaxDepth) {
+          BranchMaxDepth = D;
+          BranchDeepestLoop = L;
         }
       }
-    } else
-      llvm_unreachable("Successeur sans boucle ?");
+
+      for (BasicBlock *Succ : successors(BB)) {
+        if (Succ != Fusion && Visited.insert(Succ).second) {
+          Worklist.push_back(Succ);
+        }
+      }
+    }
+
+    errs() << "\tBranch starting at " << StartBB->getName()
+           << " has max depth: " << BranchMaxDepth << "\n";
+
+    if (BranchMaxDepth > BaseDepth && BranchMaxDepth > MaxFoundDepth) {
+      MaxFoundDepth = BranchMaxDepth;
+      BestCandidate = BranchDeepestLoop;
+    } else if (BranchMaxDepth > BaseDepth && BranchMaxDepth == MaxFoundDepth) {
+      llvm_unreachable("Multiple candidate loops with same depth found, "
+                       "ambiguous versioned loop");
+    }
   }
 
-  return CandidateLoop;
+  return BestCandidate;
 }
 
 bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
