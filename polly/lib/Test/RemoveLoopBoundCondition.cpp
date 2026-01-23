@@ -261,31 +261,57 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
     CallInst *Call;
     BinaryOperator *Operation;
     ICmpInst *ICmp;
+    bool IsLoopBound = false;
   };
 
   auto Lambda = [&](ICmpInst *ICmp, CallInst *CallInst, BinaryOperator *BinOp,
                     SmallVectorImpl<HoistedData> &ToChangee) {
     bool HasConstant = false;
-    for (auto &Op : ICmp->operands()) {
-      Instruction *Tmp = BinOp ? dyn_cast<Instruction>(BinOp)
-                               : dyn_cast<Instruction>(CallInst);
-      if (Op == Tmp)
-        continue;
-      if (isa<ConstantInt>(Op)) {
-        HasConstant = true;
+    {
+      for (auto &Op : ICmp->operands()) {
+        Instruction *Tmp = BinOp ? dyn_cast<Instruction>(BinOp)
+                                 : dyn_cast<Instruction>(CallInst);
+        if (Op == Tmp)
+          continue;
+        if (isa<ConstantInt>(Op)) {
+          HasConstant = true;
+        }
       }
     }
-    if (not HasConstant)
+    bool IsLoopBound = false;
+    {
+      for (auto &Op : CallInst->operands()) {
+        auto *Inst = dyn_cast<Instruction>(Op);
+        if (not Inst)
+          continue;
+        errs() << "Checking metadata for instruction: " << *Inst << "\n";
+
+        if (Inst->hasMetadata("loop_bound_information")) {
+          errs() << "Found loop bound metadata on instruction: " << *Inst
+                 << "\n";
+          IsLoopBound = true;
+          break;
+        }
+      }
+    }
+    if (not HasConstant and not IsLoopBound)
       return;
 
-    Value *BooleanVal2 = getBooleanValue(ICmp);
-    ICmp->replaceAllUsesWith(BooleanVal2);
-    ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp});
+    if (HasConstant) {
+      Value *BooleanVal2 = getBooleanValue(ICmp);
+      ICmp->replaceAllUsesWith(BooleanVal2);
+      ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp});
+    }
+    if (IsLoopBound) {
+      ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp, true});
+    }
+
     LLVM_DEBUG(errs() << "Removing loop bound variable condition " << *ICmp
                       << "\n";);
   };
 
-  // useful with the annotation of loop bounds inside parallel_for
+  // useful with the annotation of loop bounds inside parallel_for with
+  // KOKKOS_LOOP_BOUND
   SmallVector<HoistedData, 2> ToChangee;
   for (auto &BB : F) {
     for (auto It = BB.begin(); It != BB.end();) {
@@ -348,10 +374,16 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
     }
   }
 
-  for (auto &[CallInst, BinaryOp, ICmp] : ToChangee) {
+  for (auto &[CallInst, BinaryOp, ICmp, IsLoopBound] : ToChangee) {
     // replace the annotation value with the original value
     auto *Val = CallInst->getArgOperand(0);
     CallInst->replaceAllUsesWith(Val);
+
+    if (IsLoopBound) {
+      errs() << "Skipping assumption creation for loop bound variable: "
+             << *ICmp << "\n";
+      continue;
+    }
 
     auto *ValInst = dyn_cast_or_null<Instruction>(Val);
     if (not ValInst)
