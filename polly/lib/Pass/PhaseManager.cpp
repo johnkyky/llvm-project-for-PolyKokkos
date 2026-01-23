@@ -152,6 +152,11 @@ public:
       FAM.invalidate(F, PA);
       PA = SimplifyCFGPass().run(F, FAM);
       FAM.invalidate(F, PA);
+      PA = createFunctionToLoopPassAdaptor(IndVarSimplifyPass()).run(F, FAM);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
 
       PA = ArrayFusion().run(F, FAM);
       FAM.invalidate(F, PA);
