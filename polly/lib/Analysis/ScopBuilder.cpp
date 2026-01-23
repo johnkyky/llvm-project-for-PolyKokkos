@@ -2211,8 +2211,12 @@ void ScopBuilder::buildAccessFunctions(ScopStmt *Stmt, BasicBlock &BB,
   const InvariantLoadsSetTy &RIL = scop->getRequiredInvariantLoads();
   bool IsEntryBlock = (Stmt->getEntryBlock() == &BB);
   if (IsEntryBlock) {
-    for (Instruction *Inst : Stmt->getInstructions())
+    for (Instruction *Inst : Stmt->getInstructions()) {
+      // Invariant loads already have been processed.
+      if (isa<LoadInst>(Inst) && RIL.count(cast<LoadInst>(Inst)))
+        continue;
       BuildAccessesForInst(Inst);
+    }
     if (Stmt->isRegionStmt())
       BuildAccessesForInst(BB.getTerminator());
   } else {
