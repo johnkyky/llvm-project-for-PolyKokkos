@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ArrayFusion.h"
+#include "polly/CodeGen/IRBuilder.h"
 #include "polly/Test/ExtractAnnotatedFromLoop.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Verifier.h"
@@ -89,6 +90,19 @@ bool sameArraysFusion(Function &F, ExtractAnnotatedSizes::Result &Anno,
   return Res;
 }
 
+void assumePositiveSize(ExtractAnnotatedSizes::Result &Anno) {
+  for (const auto &[InstArray, Data] : Anno) {
+    for (auto *SizeInst : Data.Sizes) {
+      // create an assume instruction that the size is > 0
+      IRBuilder<> Builder(SizeInst->getNextNode());
+      auto *SizeType = SizeInst->getType();
+      auto *Zero = ConstantInt::get(SizeType, 0);
+      auto *Cond = Builder.CreateICmpSGT(SizeInst, Zero, "array_size_positive");
+      auto *Assume = Builder.CreateAssumption(Cond);
+    }
+  }
+}
+
 } // namespace
 
 PreservedAnalyses ArrayFusion::run(Function &F, FunctionAnalysisManager &AM) {
@@ -102,6 +116,8 @@ PreservedAnalyses ArrayFusion::run(Function &F, FunctionAnalysisManager &AM) {
   DT.recalculate(F);
   auto Anno = ExtractAnnotatedSizes().run(F, AM);
   sameArraysFusion(F, Anno, DT);
+
+  assumePositiveSize(Anno);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
