@@ -3832,7 +3832,15 @@ void ScopBuilder::buildScop(Region &R, AssumptionCache &AC) {
       // chose the first statement of the basic block the LoadInst is in.
       ArrayRef<ScopStmt *> List = scop->getStmtListFor(BB);
       assert(!List.empty());
-      ScopStmt *RILStmt = List.front();
+      ScopStmt *RILStmt = nullptr;
+      for (auto *S : List) {
+        for (auto *I : S->insts()) {
+          if (I == Load) {
+            RILStmt = S;
+          }
+        }
+      }
+      assert(RILStmt && "No statement found for invariant load");
       buildMemoryAccess(Load, RILStmt);
     }
   }
