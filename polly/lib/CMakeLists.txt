@@ -108,6 +108,7 @@ add_llvm_pass_plugin(Polly
   Test/TriangularLoopFix.cpp
   Test/VarFusion.cpp
   Test/PrintParamsValue.cpp
+  Test/LowerInstructionForReduction.cpp
 
   ${POLLY_HEADER_FILES}
 
