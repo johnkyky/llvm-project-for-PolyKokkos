@@ -97,6 +97,7 @@ struct PeelResult {
 const PeelResult computeDuration(ScalarEvolution &SE,
                                  const SCEVAddRecExpr *AddRec) {
   if (not AddRec->isAffine()) {
+    errs().indent(6) << "AddRec is not affine: " << *AddRec << "\n";
     return {SE.getCouldNotCompute(), PeelDirection::NONE, nullptr};
   }
 
@@ -104,17 +105,25 @@ const PeelResult computeDuration(ScalarEvolution &SE,
   const SCEV *Step = AddRec->getStepRecurrence(SE);
 
   const SCEVConstant *StepConst = dyn_cast<SCEVConstant>(Step);
-  if (not StepConst)
+  if (not StepConst) {
+    errs().indent(6) << "Step is not constant: " << *Step << "\n";
     return {SE.getCouldNotCompute(), PeelDirection::NONE, nullptr};
+  }
 
   APInt StepVal = StepConst->getAPInt();
+
+  errs().indent(6) << "AddRec Start: " << *Start << ", Step: " << StepVal
+                   << "\n";
 
   const SCEV *Zero = SE.getZero(Start->getType());
   const SCEV *One = SE.getOne(Start->getType());
 
   if (StepVal.isStrictlyPositive()) {
-    if (SE.isKnownNonNegative(Start))
+    errs().indent(6) << "Step is positive\n";
+    if (SE.isKnownNonNegative(Start)) {
+      errs().indent(6) << "No peeling needed (Start >= 0)\n";
       return {Zero, PeelDirection::NONE, nullptr};
+    }
 
     // Formule : ceil( (-Start) / Step )
     // En arithmétique entière : ( (-Start) + Step - 1 ) / Step
@@ -128,8 +137,11 @@ const PeelResult computeDuration(ScalarEvolution &SE,
   }
 
   if (StepVal.isNegative()) {
-    if (SE.isKnownNonPositive(Start))
+    errs().indent(6) << "Step is negative\n";
+    if (SE.isKnownNonPositive(Start)) {
+      errs().indent(6) << "No peeling needed (Start <= 0)\n";
       return {Zero, PeelDirection::BACK, AddRec->getLoop()};
+    }
 
     // Formule : ceil( Start / (-Step) )
     // Soit AbsStep = -Step
@@ -158,12 +170,16 @@ mapTriangularLoopToOuterIV(std::vector<Loop *> TriangularLoops, LoopInfo &LI,
 
   for (auto *L : TriangularLoops) {
     const SCEV *Bound = SE.getBackedgeTakenCount(L);
-    errs() << "Bound " << *Bound << "\n";
+    errs() << "Bound " << *Bound << " pour " << L->getName() << "\n";
 
     // Loop *OuterLoop = getOutermostLoop(L);
 
     if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(Bound)) {
       auto PeelRes = computeDuration(SE, AR);
+      errs().indent(2) << "Peel Result for loop " << L->getName() << ": "
+                       << "Count = " << *(PeelRes.Count)
+                       << ", Direction = " << toString(PeelRes.Direction)
+                       << "\n";
       Map.insert({L, PeelRes});
     } else
       llvm_unreachable("Bound is not an AddRecExpr ?");
@@ -187,43 +203,18 @@ Value *getLoopUpperBound(Loop *L, ScalarEvolution &SE) {
 
 using PeelItem = std::pair<Loop *, PeelResult>;
 
-SmallVector<PeelItem, 1>
-getOrderedPeelingList(DenseMap<Loop *, PeelResult> &Map) {
-
-  SmallVector<PeelItem, 1> Order;
-  Order.reserve(Map.size());
-
-  for (auto &KV : Map) {
-    Order.push_back(KV);
-  }
-
-  std::sort(Order.begin(), Order.end(),
-            [](const PeelItem &A, const PeelItem &B) {
-              unsigned DepthA = A.first->getLoopDepth();
-              unsigned DepthB = B.first->getLoopDepth();
-
-              if (DepthA != DepthB)
-                return DepthA < DepthB;
-
-              return A.first->getHeader()->getName() <
-                     B.first->getHeader()->getName();
-            });
-
-  return Order;
-}
-
 struct PeelingAction {
   Loop *TargetLoop;
   PeelDirection Direction;
   int64_t MaxPeelCount;
-
-  // Pour retrouver le SCEV original si besoin,
-  // ou on garde juste l'entier pour l'appel à peelLoop
 };
 
-std::vector<PeelingAction>
+using LoopPeelPlanMap =
+    std::map<std::pair<const Loop *, PeelDirection>, int64_t>;
+
+DenseMap<Loop *, SmallVector<PeelingAction, 2>>
 getOptimizedPeelingPlan(DenseMap<Loop *, PeelResult> &TriggerMap) {
-  std::map<std::pair<const Loop *, PeelDirection>, int64_t> MergedRequests;
+  LoopPeelPlanMap MergedPlan;
 
   for (auto &[KV, PR] : TriggerMap) {
     const Loop *Target = PR.LoopToPeel;
@@ -234,43 +225,80 @@ getOptimizedPeelingPlan(DenseMap<Loop *, PeelResult> &TriggerMap) {
 
     auto Key = std::make_pair(Target, PR.Direction);
 
-    if (MergedRequests.count(Key)) {
-      if (Count > MergedRequests[Key]) {
-        MergedRequests[Key] = Count;
+    if (MergedPlan.count(Key)) {
+      if (Count > MergedPlan[Key]) {
+        MergedPlan[Key] = Count;
       }
     } else {
-      MergedRequests[Key] = Count;
+      MergedPlan[Key] = Count;
     }
   }
 
-  std::vector<PeelingAction> ActionList;
-  ActionList.reserve(MergedRequests.size());
-
-  for (auto &KV : MergedRequests) {
-    ActionList.push_back(
-        {const_cast<Loop *>(KV.first.first), KV.first.second, KV.second});
+  DenseMap<Loop *, SmallVector<PeelingAction, 2>> ActionMap;
+  for (auto &[Key, Value] : MergedPlan) {
+    Loop *L = const_cast<Loop *>(Key.first);
+    Loop *Outermost = getOutermostLoop(L);
+    ActionMap[Outermost].push_back(
+        {const_cast<Loop *>(Key.first), Key.second, Value});
   }
 
-  std::sort(ActionList.begin(), ActionList.end(),
-            [](const PeelingAction &A, const PeelingAction &B) {
-              unsigned DepthA = A.TargetLoop->getLoopDepth();
-              unsigned DepthB = B.TargetLoop->getLoopDepth();
+  errs() << "\n\n\nPeeling Plan (merged):\n";
+  for (auto &[Key, Value] : ActionMap) {
+    errs() << "Outermost Loop: " << Key->getName() << "\n";
+    for (auto &Action : Value) {
+      errs().indent(2) << "\tLoop: " << Action.TargetLoop->getName()
+                       << ", Direction: " << toString(Action.Direction)
+                       << ", Count: " << Action.MaxPeelCount << "\n";
+    }
+  }
+  errs() << "\n\n\n";
 
-              if (DepthA != DepthB)
-                return DepthA < DepthB;
+  for (auto &[Key, Value] : ActionMap) {
+    std::sort(Value.begin(), Value.end(),
+              [](const PeelingAction &A, const PeelingAction &B) {
+                unsigned DepthA = A.TargetLoop->getLoopDepth();
+                unsigned DepthB = B.TargetLoop->getLoopDepth();
 
-              if (A.Direction != B.Direction)
-                return A.Direction < B.Direction;
-              return false;
-            });
+                if (DepthA != DepthB)
+                  return DepthA < DepthB;
 
-  size_t Accumulator = 0;
-  for (auto It = ActionList.rbegin(); It != ActionList.rend(); ++It) {
-    Accumulator += It->MaxPeelCount;
-    It->MaxPeelCount = Accumulator;
+                if (A.Direction != B.Direction)
+                  return A.Direction < B.Direction;
+                return false;
+              });
   }
 
-  return ActionList;
+  errs() << "\n\n\nPeeling Plan (merged):\n";
+  for (auto &[Key, Value] : ActionMap) {
+    errs() << "Outermost Loop: " << Key->getName() << "\n";
+    for (auto &Action : Value) {
+      errs().indent(2) << "\tLoop: " << Action.TargetLoop->getName()
+                       << ", Direction: " << toString(Action.Direction)
+                       << ", Count: " << Action.MaxPeelCount << "\n";
+    }
+  }
+  errs() << "\n\n\n";
+
+  for (auto &[Key, Value] : ActionMap) {
+    size_t Accumulator = 0;
+    for (auto It = Value.rbegin(); It != Value.rend(); ++It) {
+      Accumulator += It->MaxPeelCount;
+      It->MaxPeelCount = Accumulator;
+    }
+  }
+
+  errs() << "\n\n\nPeeling Plan (merged):\n";
+  for (auto &[Key, Value] : ActionMap) {
+    errs() << "Outermost Loop: " << Key->getName() << "\n";
+    for (auto &Action : Value) {
+      errs().indent(2) << "\tLoop: " << Action.TargetLoop->getName()
+                       << ", Direction: " << toString(Action.Direction)
+                       << ", Count: " << Action.MaxPeelCount << "\n";
+    }
+  }
+  errs() << "\n\n\n";
+
+  return ActionMap;
 }
 
 void transformTriangularLoops(PeelingAction &PA, LoopInfo &LI,
@@ -343,8 +371,8 @@ void transformTriangularLoops(PeelingAction &PA, LoopInfo &LI,
       return;
     }
 
-    { // Replace uses of the IV in the peeled loop with the hardcoded value (N -
-      // k)
+    // Replace uses of the IV in the peeled loop with the hardcoded value (N-k)
+    {
       Value *MappedVal = VMap[OriginalIV];
       Instruction *PeeledLoopIV = dyn_cast_or_null<Instruction>(MappedVal);
       if (!PeeledLoopIV) {
@@ -359,30 +387,52 @@ void transformTriangularLoops(PeelingAction &PA, LoopInfo &LI,
 
       PeeledLoopIV->replaceAllUsesWith(HardcodedIV);
     }
+  }
+}
 
-    SE.forgetAllLoops();
+void clearCondition(PeelingAction &PA, ScalarEvolution &SE) {
+  SE.forgetAllLoops();
 
-    const SCEV *BTC = SE.getBackedgeTakenCount(PA.TargetLoop);
-    if (!isa<SCEVCouldNotCompute>(BTC)) {
-      for (BasicBlock *BB : PA.TargetLoop->blocks()) {
-        for (Instruction &I : llvm::make_early_inc_range(*BB)) {
-          if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
-            if (Cmp->getPredicate() == CmpInst::ICMP_ULT ||
-                Cmp->getPredicate() == CmpInst::ICMP_SLT) {
+  const SCEV *BTC = SE.getBackedgeTakenCount(PA.TargetLoop);
+  if (not isa<SCEVCouldNotCompute>(BTC)) {
+    for (BasicBlock *BB : PA.TargetLoop->blocks()) {
+      for (Instruction &I : llvm::make_early_inc_range(*BB)) {
+        if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
+          if (Cmp->getPredicate() == CmpInst::ICMP_ULT ||
+              Cmp->getPredicate() == CmpInst::ICMP_SLT) {
+            errs() << "Examining ICmp: " << *Cmp << "\n";
 
-              const SCEV *LHS = SE.getSCEV(Cmp->getOperand(0));
-              const SCEV *RHS = SE.getSCEV(Cmp->getOperand(1));
-              const SCEV *Delta = SE.getMinusSCEV(RHS, LHS);
+            const SCEV *LHS = SE.getSCEV(Cmp->getOperand(0));
+            const SCEV *RHS = SE.getSCEV(Cmp->getOperand(1));
+            const SCEV *Delta = SE.getMinusSCEV(RHS, LHS);
 
-              if (auto *AR = dyn_cast<SCEVAddRecExpr>(Delta)) {
-                const SCEV *BTC = SE.getBackedgeTakenCount(PA.TargetLoop);
+            errs() << "  LHS: " << *LHS << "\n";
+            errs() << "  RHS: " << *RHS << "\n";
+            errs() << "  Delta: " << *Delta << "\n";
 
-                if (!isa<SCEVCouldNotCompute>(BTC)) {
-                  const SCEV *LastValue = AR->evaluateAtIteration(BTC, SE);
-                  if (SE.isKnownPositive(LastValue)) {
-                    Cmp->replaceAllUsesWith(
-                        ConstantInt::getTrue(Cmp->getContext()));
-                  }
+            if (auto *AR = dyn_cast<SCEVAddRecExpr>(Delta)) {
+              const SCEV *BTC = SE.getBackedgeTakenCount(PA.TargetLoop);
+
+              errs() << "  Found AddRec in Delta: " << *AR << "\n";
+              errs() << "  Backedge Taken Count: " << *BTC << "\n";
+
+              if (!isa<SCEVCouldNotCompute>(BTC)) {
+                errs() << "  Evaluating at iteration BTC\n";
+
+                const SCEV *Step = AR->getStepRecurrence(SE);
+
+                const SCEV *CriticalValue = nullptr;
+
+                if (SE.isKnownNonPositive(Step)) {
+                  CriticalValue = AR->evaluateAtIteration(BTC, SE);
+                } else if (SE.isKnownNonNegative(Step)) {
+                  CriticalValue = AR->getStart();
+                }
+
+                if (CriticalValue && SE.isKnownPositive(CriticalValue)) {
+                  errs() << "  Proven always true based on SCEV!\n";
+                  Cmp->replaceAllUsesWith(
+                      ConstantInt::getTrue(Cmp->getContext()));
                 }
               }
             }
@@ -391,11 +441,7 @@ void transformTriangularLoops(PeelingAction &PA, LoopInfo &LI,
       }
     }
   }
-  for (auto [K, V] : VMap) {
-    errs() << "VMap: " << *K << " -> " << *V << "\n";
-  }
 }
-
 } // namespace
 
 std::vector<Loop *> polly::getTriangularLoops(LoopInfo &LI, ScalarEvolution &SE,
@@ -434,8 +480,8 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
 
   auto TriangularLoops = getTriangularLoops(LI, SE, DT);
   for (auto *L : TriangularLoops) {
-    errs() << "Boucle triangulaire detectee: \n"
-           << L->getHeader()->getName() << "\n";
+    errs() << "Boucle triangulaire detectee: " << L->getHeader()->getName()
+           << "\n";
   }
 
   if (TriangularLoops.empty()) {
@@ -455,17 +501,23 @@ PreservedAnalyses TriangularLoopFixPass::run(Function &F,
                                   : "nullptr loop")
            << "\n\n";
   }
-  auto Order = getOptimizedPeelingPlan(Map);
+  auto PeelingPlanMap = getOptimizedPeelingPlan(Map);
 
-  for (auto &L : Order) {
-    errs() << " -> Iterations vides: " << L.MaxPeelCount
-           << "\n    on doit peel " << toString(L.Direction) << " de la boucle "
-           << L.TargetLoop->getName() << "\n\n";
+  for (auto &[Key, Value] : PeelingPlanMap) {
+    errs() << "Outermost Loop: " << Key->getName() << "\n";
+    for (auto &Action : Value) {
+      errs().indent(2) << "\tLoop: " << Action.TargetLoop->getName()
+                       << ", Direction: " << toString(Action.Direction)
+                       << ", Count: " << Action.MaxPeelCount << "\n";
+    }
   }
 
   auto &AC = AM.getResult<AssumptionAnalysis>(F);
-  for (auto &LoopItem : Order) {
-    transformTriangularLoops(LoopItem, LI, SE, DT, AC);
+  for (auto &[Key, Value] : PeelingPlanMap) {
+    for (auto &PA : Value) {
+      transformTriangularLoops(PA, LI, SE, DT, AC);
+      clearCondition(PA, SE);
+    }
   }
 
   if (verifyFunction(F, &errs())) {
