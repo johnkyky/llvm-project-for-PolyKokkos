@@ -301,6 +301,7 @@ bool moveInnerLoopLoad(Function &F) {
     IRBuilder<> Builder(GEP->getNextNode());
     auto *HoistedLoad = Builder.CreateLoad(LoadArray->getType(), GEP);
     HoistedLoad->setName(LoadArray->getName() + Name);
+    HoistedLoad->copyMetadata(*LoadArray);
 
     LLVM_DEBUG(errs() << "Hoisting load " << *LoadArray << " to "
                       << *HoistedLoad << "\n";);
