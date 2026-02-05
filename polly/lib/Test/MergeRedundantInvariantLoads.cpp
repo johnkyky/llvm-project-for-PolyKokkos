@@ -400,15 +400,7 @@ MergeRedundantInvariantLoadsPass::run(Function &F,
   LLVM_DEBUG(errs() << "\nMergeRedundantInvariantLoadsPass pass run on "
                     << F.getName() << "\n";);
 
-  AM.clear();
-
-  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-
-  auto &AC = AM.getResult<AssumptionAnalysis>(F);
-  errs() << AC.assumptions().size() << " assumptions found:\n";
-  for (auto &Assumtion : AC.assumptions()) {
-    LLVM_DEBUG(errs() << "Assumption: " << *Assumtion << "\n";);
-  }
+  ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
 
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   globalLoadElimination(F, DT, SE);
