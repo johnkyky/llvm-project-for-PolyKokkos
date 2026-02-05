@@ -31,142 +31,215 @@ using namespace llvm;
 using namespace polly;
 
 namespace {
-Value *checkPhiStoreRelation(PHINode *Phi) {
-  errs() << "\nChecking PHI store relation " << *Phi << "\n";
-  if (Phi->getNumIncomingValues() > 2) {
-    return nullptr;
-  }
 
-  errs() << "Number of incoming values: " << Phi->getNumIncomingValues()
-         << "\n";
-  if (Phi->getNumIncomingValues() == 1) {
+/* Find a store instruction in the given basic block (BB) that stores the
+   given value (Val) to a pointer that is invariant with respect to the loop
+   (i.e., the pointer is valid at the beginning of the loop, LoopHeader).
+   If such a store is found, return the pointer operand of the store.
+   Otherwise, return nullptr.
+*/
+Value *findInvariantStorePointer(Value *Val, BasicBlock *BB, DominatorTree &DT,
+                                 BasicBlock *LoopHeader) {
 
-    Value *Val = Phi->getIncomingValue(0);
-    BasicBlock *Block = Phi->getIncomingBlock(0);
+  for (Instruction &I : llvm::reverse(*BB)) {
 
-    for (auto *U : Val->users()) {
-      Instruction *Inst = llvm::dyn_cast<Instruction>(U);
-      if (Inst->getParent() != Block)
-        continue;
+    if (auto *Store = dyn_cast<StoreInst>(&I)) {
+      if (Store->getValueOperand() == Val) {
 
-      errs() << "   On check le use " << *Inst << "\n";
-      if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
-        errs() << "    Found store: " << *Store << "\n";
-        return Store->getPointerOperand();
-      }
-    }
+        Value *Ptr = Store->getPointerOperand();
 
-    return nullptr;
-  }
+        bool IsInvariant = true;
+        if (auto *InstPtr = dyn_cast<Instruction>(Ptr)) {
+          if (!DT.dominates(InstPtr, LoopHeader)) {
+            IsInvariant = false;
+          }
+        }
 
-  Value *FirstVal = Phi->getIncomingValue(0);
-  BasicBlock *FirstBlock = Phi->getIncomingBlock(0);
-  Value *FirstStorePtr = nullptr;
-
-  Value *SecondVal = Phi->getIncomingValue(1);
-  BasicBlock *SecondBlock = Phi->getIncomingBlock(1);
-
-  if (isa<Constant>(FirstVal)) {
-    errs() << "First value is constant\n";
-    for (auto *U : SecondVal->users()) {
-      Instruction *Inst = dyn_cast<Instruction>(U);
-      if (Inst->getParent() != SecondBlock)
-        continue;
-
-      errs() << "   On check le second use " << *Inst << "\n";
-      if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
-        errs() << "    Found store: " << *Store << "\n";
-        return Store->getPointerOperand();
-      }
-    }
-    return SecondVal;
-  }
-  if (isa<Constant>(SecondVal)) {
-    errs() << "Second value is constant\n";
-    return FirstVal;
-  }
-
-  // First
-  for (auto *U : FirstVal->users()) {
-    Instruction *Inst = llvm::dyn_cast<Instruction>(U);
-    if (Inst->getParent() != FirstBlock)
-      continue;
-    errs() << "   On check le first use " << *Inst << "\n";
-    if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
-      errs() << "    Found store: " << *Store << "\n";
-      FirstStorePtr = Store->getPointerOperand();
-    }
-  }
-
-  // Second
-  for (auto *U : SecondVal->users()) {
-    Instruction *Inst = dyn_cast<Instruction>(U);
-    if (Inst->getParent() != SecondBlock)
-      continue;
-
-    errs() << "   On check le second use " << *Inst << "\n";
-    if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
-      errs() << "    Found store: " << *Store << "\n";
-      if (Store->getPointerOperand() == FirstStorePtr) {
-        errs() << "    Matching store pointer found: " << *FirstStorePtr
-               << "\n";
-        return FirstStorePtr;
+        if (IsInvariant)
+          return Ptr;
       }
     }
   }
   return nullptr;
 }
 
-void demoteNonIndexPhis(llvm::Function &F, llvm::LoopInfo &LI,
-                        llvm::ScalarEvolution &SE) {
+/* Check if the given PHI node (Phi) has a relation to stores in its
+   incoming blocks that would allow us to demote it to memory.
+   If such a relation is found, return the pointer operand of the store.
+   Otherwise, return nullptr.
+*/
+Value *checkPhiStoreRelation(PHINode *Phi, DominatorTree &DT) {
+  if (Phi->getNumIncomingValues() != 2)
+    return nullptr;
 
-  std::vector<llvm::PHINode *> PhisToDemote;
+  BasicBlock *Header = Phi->getParent();
+
+  Value *InVals[2];
+  BasicBlock *InBlocks[2];
+  Value *StorePtrs[2] = {nullptr, nullptr};
+
+  for (int I = 0; I < 2; ++I) {
+    InVals[I] = Phi->getIncomingValue(I);
+    InBlocks[I] = Phi->getIncomingBlock(I);
+    StorePtrs[I] =
+        findInvariantStorePointer(InVals[I], InBlocks[I], DT, Header);
+  }
+
+  for (int I = 0; I < 2; ++I) {
+    errs().indent(4) << "PHI Incoming Value " << I << ": " << *InVals[I]
+                     << " from Block: " << InBlocks[I]->getName() << "\n";
+    if (StorePtrs[I]) {
+      errs().indent(6) << "-> Found Store to Pointer: " << *StorePtrs[I]
+                       << "\n";
+    } else {
+      errs().indent(6) << "-> No Store found for this incoming value.\n";
+    }
+  }
+
+  if (StorePtrs[0] && StorePtrs[1] && StorePtrs[0] == StorePtrs[1]) {
+    errs().indent(4) << "Match: Both branches use the same pointer.\n";
+    return StorePtrs[0];
+  }
+
+  if (isa<Constant>(InVals[0]) && StorePtrs[1]) {
+    errs().indent(4)
+        << "Found Constant entry and Pointer in other branch. Reusing: "
+        << *StorePtrs[1] << "\n";
+    return StorePtrs[1];
+  }
+
+  if (isa<Constant>(InVals[1]) && StorePtrs[0]) {
+    errs().indent(4)
+        << "Found Constant entry and Pointer in other branch. Reusing: "
+        << *StorePtrs[0] << "\n";
+    return StorePtrs[0];
+  }
+
+  for (int I = 0; I < 2; ++I) {
+    if (auto *Load = dyn_cast<LoadInst>(InVals[I])) {
+      Value *LoadPtr = Load->getPointerOperand();
+      int Other = 1 - I;
+      if (StorePtrs[Other] && StorePtrs[Other] == LoadPtr) {
+        return LoadPtr;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+/* Materialize PHI Node into memory (Alloca + Stores + Load)
+   with proper handling of LCSSA uses outside the loop.
+*/
+void materializePhi(PHINode *Phi, DominatorTree &DT, LoopInfo &LI) {
+  Function *F = Phi->getFunction();
+  IRBuilder<> BuilderEntry(&F->getEntryBlock(), F->getEntryBlock().begin());
+  AllocaInst *Alloca = BuilderEntry.CreateAlloca(Phi->getType(), nullptr,
+                                                 Phi->getName() + ".addr");
+
+  for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+    Value *Val = Phi->getIncomingValue(I);
+    BasicBlock *IncomingBB = Phi->getIncomingBlock(I);
+
+    Instruction *TI = IncomingBB->getTerminator();
+    IRBuilder<> BuilderStore(TI);
+    BuilderStore.CreateStore(Val, Alloca);
+  }
+
+  IRBuilder<> BuilderLoad(Phi->getParent(),
+                          Phi->getParent()->getFirstInsertionPt());
+  LoadInst *Load = BuilderLoad.CreateLoad(Phi->getType(), Alloca,
+                                          Phi->getName() + ".reload");
+
+  Phi->replaceAllUsesWith(Load);
+}
+
+void demoteNonIndexPhis(Function &F, LoopInfo &LI, ScalarEvolution &SE,
+                        DominatorTree &DT) {
+
+  SmallVector<PHINode *, 16> PhisToDemote;
+
   for (auto &BB : F) {
-    llvm::Loop *L = LI.getLoopFor(&BB);
+    Loop *L = LI.getLoopFor(&BB);
+    if (!L || L->getHeader() != &BB)
+      continue;
 
     for (auto &I : BB) {
-      auto *Phi = llvm::dyn_cast<llvm::PHINode>(&I);
+      auto *Phi = dyn_cast<PHINode>(&I);
       if (!Phi)
         continue;
 
-      errs() << "Examining PHI: " << *Phi << "\n";
-      errs() << "  In Loop: " << (L ? L->getHeader()->getName() : "None")
-             << "\n";
-
-      if (not SE.isSCEVable(Phi->getType())) {
-        errs() << "  Not SCEVable. Demoting.\n";
-        PhisToDemote.push_back(Phi);
-        continue;
-      }
-
-      const auto *S = SE.getSCEV(Phi);
-      errs() << "  SCEV: " << *S << "\n";
-      if (auto *AR = llvm::dyn_cast<llvm::SCEVAddRecExpr>(S)) {
-        if (AR->getLoop() == L) {
-          errs() << "  AddRec is for the current loop. Not demoting.\n";
-          continue;
+      if (SE.isSCEVable(Phi->getType())) {
+        const auto *S = SE.getSCEV(Phi);
+        if (auto *AR = dyn_cast<SCEVAddRecExpr>(S)) {
+          if (AR->getLoop() == L)
+            continue;
         }
       }
-
       PhisToDemote.push_back(Phi);
     }
   }
 
+  errs() << "Found " << PhisToDemote.size() << " PHIs to demote in function "
+         << F.getName() << "\n";
   for (auto *Phi : PhisToDemote) {
-    if (auto *Val = checkPhiStoreRelation(Phi)) {
-      errs() << "Demoting PHI: " << *Phi << "\n";
+    errs().indent(2) << "PHI to demote: " << *Phi << "\n";
+  }
 
-      IRBuilder<> Builder(Phi);
-      LoadInst *Load = Builder.CreateLoad(Phi->getType(), Val, "demoted_phi");
-      Phi->replaceAllUsesWith(Load);
-      Phi->eraseFromParent();
-      errs() << "  Demoted PHI to load from " << *Val << "\n";
+  SmallVector<PHINode *, 0> DeadPhis;
+  for (auto *Phi : PhisToDemote) {
+    errs() << "Processing PHI: " << *Phi << "\n";
+
+    Value *Ptr = checkPhiStoreRelation(Phi, DT);
+
+    if (Ptr) {
+      errs().indent(2) << "Found Existing Pointer for PHI: " << *Ptr << "\n";
+      bool PointerIsSafe = true;
+
+      if (auto *InstPtr = dyn_cast<Instruction>(Ptr)) {
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          BasicBlock *InBlock = Phi->getIncomingBlock(I);
+          if (!DT.dominates(InstPtr, InBlock->getTerminator())) {
+            PointerIsSafe = false;
+            break;
+          }
+        }
+      }
+
+      if (PointerIsSafe) {
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          Value *InVal = Phi->getIncomingValue(I);
+          if (isa<Constant>(InVal)) {
+            BasicBlock *InBlock = Phi->getIncomingBlock(I);
+            Instruction *Terminator = InBlock->getTerminator();
+
+            IRBuilder<> ConstBuilder(Terminator);
+            ConstBuilder.CreateStore(InVal, Ptr);
+
+            errs().indent(2) << "Safe Store for constant: " << *InVal << "\n";
+          }
+        }
+      }
+    } else {
+      errs().indent(2) << "Materializing PHI to New Alloca: " << *Phi << "\n";
+      materializePhi(Phi, DT, LI);
+      DeadPhis.push_back(Phi);
     }
+  }
+
+  for (auto *Phi : DeadPhis) {
+    Phi->eraseFromParent();
   }
 }
 
-void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
-                         DominatorTree &DT) {
+/* Demote loads that have multiple uses within the same basic block by
+   cloning the load for each use. This is useful to enable optimizations like
+   those in Polly that may not handle multiple uses of the same load within a
+   basic block.
+*/
+void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
+                        DominatorTree &DT) {
+  errs() << "Demoting uses of arrays\n";
   for (auto &BB : F) {
     if (!LI.getLoopFor(&BB))
       continue;
@@ -196,8 +269,8 @@ void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
     }
 
     for (LoadInst *Load : LoadsToDemote) {
-      errs() << "Demoting Load: " << *Load << " with " << Load->getNumUses()
-             << " uses.\n";
+      errs().indent(2) << "Demoting Load: " << *Load << " with "
+                       << Load->getNumUses() << " uses.\n";
 
       SmallVector<User *, 8> Users;
       SmallPtrSet<User *, 8> Seen;
@@ -235,44 +308,6 @@ void demoteUsesOfArrayss(Function &F, LoopInfo &LI, ScalarEvolution &SE,
     }
   }
 }
-
-void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE) {
-  for (auto &BB : F) {
-    if (not LI.getLoopFor(&BB))
-      continue;
-
-    for (auto &I : BB) {
-      if (auto *Load = dyn_cast<LoadInst>(&I)) {
-        if (Load->getNumUses() <= 1)
-          continue;
-
-        Value *Ptr = Load->getPointerOperand();
-        errs() << "Examining Load: " << *Load << "  " << Load->getNumUses()
-               << "  " << *Ptr << "\n";
-
-        for (auto *U : Load->users()) {
-          Instruction *Inst = dyn_cast<Instruction>(U);
-          errs() << "    On use " << *Inst << "\n";
-          // if (Inst == nullptr || Inst == Load)
-          //   continue;
-          // errs() << "   On use " << *Inst << "\n";
-          // if (auto *Store = llvm::dyn_cast<llvm::StoreInst>(Inst)) {
-          //   if (Store->getValueOperand() != Load)
-          //     continue;
-          //   errs() << "    Found store: " << *Store << "\n";
-          //   IRBuilder<> Builder(Load);
-          //   LoadInst *NewLoad =
-          //       Builder.CreateLoad(Load->getType(), Ptr, "demoted_load");
-          //   Store->setOperand(0, NewLoad);
-          //   errs() << "    Replaced store value with new load: " << *NewLoad
-          //          << "\n";
-          // }
-        }
-      }
-    }
-  }
-  return;
-}
 } // namespace
 
 PreservedAnalyses ArrayReg2MemPass::run(Function &F,
@@ -285,10 +320,10 @@ PreservedAnalyses ArrayReg2MemPass::run(Function &F,
 
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-  // demoteNonIndexPhis(F, LI, SE);
-
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  demoteUsesOfArrayss(F, LI, SE, DT);
+  demoteNonIndexPhis(F, LI, SE, DT);
+
+  demoteUsesOfArrays(F, LI, SE, DT);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
