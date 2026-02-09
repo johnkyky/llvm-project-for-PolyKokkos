@@ -165,7 +165,7 @@ static cl::opt<GranularityChoice> StmtGranularity(
                           "Scalar independence heuristic"),
                clEnumValN(GranularityChoice::Stores, "store",
                           "Store-level granularity")),
-    cl::init(GranularityChoice::ScalarIndependence), cl::cat(PollyCategory));
+    cl::init(GranularityChoice::Stores), cl::cat(PollyCategory));
 
 /// Helper to treat non-affine regions and basic blocks the same.
 ///
