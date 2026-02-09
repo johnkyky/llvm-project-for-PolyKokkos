@@ -219,11 +219,10 @@ static cl::opt<bool>
 
 bool polly::PollyInvariantLoadHoisting;
 
-static cl::opt<bool, true>
-    XPollyInvariantLoadHoisting("polly-invariant-load-hoisting",
-                                cl::desc("Hoist invariant loads."),
-                                cl::location(PollyInvariantLoadHoisting),
-                                cl::Hidden, cl::cat(PollyCategory));
+static cl::opt<bool, true> XPollyInvariantLoadHoisting(
+    "polly-invariant-load-hoisting", cl::desc("Hoist invariant loads."),
+    cl::location(PollyInvariantLoadHoisting), cl::init(true), cl::Hidden,
+    cl::cat(PollyCategory));
 
 static cl::opt<bool> PollyAllowErrorBlocks(
     "polly-allow-error-blocks",
