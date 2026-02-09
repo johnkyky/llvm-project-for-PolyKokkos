@@ -29,6 +29,8 @@
 #include "polly/Test/ArrayReg2Mem.h"
 #include "polly/Test/CheckParallelism.h"
 #include "polly/Test/LoopFusion.h"
+#include "polly/Test/LowerInstructionForReduction.h"
+#include "polly/Test/MergeRedundantInvariantLoads.h"
 #include "polly/Test/PrintParamsValue.h"
 #include "polly/Test/RemoveLoopBoundCondition.h"
 #include "polly/Test/RemoveLoopVersioning.h"
@@ -153,9 +155,13 @@ public:
       PA = SimplifyCFGPass().run(F, FAM);
       FAM.invalidate(F, PA);
       PA = createFunctionToLoopPassAdaptor(IndVarSimplifyPass()).run(F, FAM);
+      FAM.invalidate(F, PA);
       PA = InstCombinePass().run(F, FAM);
       FAM.invalidate(F, PA);
       PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+
+      PA = MergeRedundantInvariantLoadsPass().run(F, FAM);
       FAM.invalidate(F, PA);
 
       PA = ArrayFusion().run(F, FAM);
@@ -164,7 +170,13 @@ public:
       FAM.invalidate(F, PA);
       PA = ArrayReg2MemPass().run(F, FAM);
       FAM.invalidate(F, PA);
+      PA = InstCombinePass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = SimplifyCFGPass().run(F, FAM);
+      FAM.invalidate(F, PA);
       PA = ADCEPass().run(F, FAM);
+      FAM.invalidate(F, PA);
+      PA = LowerInstructionForReductionPass().run(F, FAM);
       FAM.invalidate(F, PA);
     }
 
