@@ -191,7 +191,7 @@ public:
 
     // ScopDetection is modifying RegionInfo, do not cache it, nor use a cached
     // version.
-    RegionInfo RI = RegionInfoAnalysis().run(F, FAM);
+    RegionInfo &RI = FAM.getResult<RegionInfoAnalysis>(F);
     auto AnnotedSizes = ExtractAnnotatedSizes().run(F, FAM);
 
     LoopInfo &LI2 = FAM.getResult<LoopAnalysis>(F);
