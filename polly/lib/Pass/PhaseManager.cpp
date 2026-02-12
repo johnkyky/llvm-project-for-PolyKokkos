@@ -232,7 +232,7 @@ public:
       ViewScops("scopsonly", true);
 
     // Phase: scops
-    AssumptionCache AC = AssumptionAnalysis().run(F, FAM);
+    AssumptionCache &AC = FAM.getResult<AssumptionAnalysis>(F);
     const DataLayout &DL = F.getParent()->getDataLayout();
     ScopInfo Info(DL, SD, SE, LI2, AA, DT2, AC, ORE);
     if (Opts.isPhaseEnabled(PassPhase::PrintScopInfo)) {
