@@ -41,10 +41,15 @@ bool isLoopBoundCondition(BranchInst *Branch, Value *Val, LoopInfo &LI,
                           DominatorTree &DT, PostDominatorTree &PDT) {
   auto *ValInst = dyn_cast<Instruction>(Val);
   auto *FissionBlock = ValInst->getParent();
-  Instruction *Term = FissionBlock->getTerminator();
   BasicBlock *Succ0 = Branch->getParent()->getTerminator()->getSuccessor(0);
   BasicBlock *Succ1 = Branch->getParent()->getTerminator()->getSuccessor(1);
   BasicBlock *FusionBlock = PDT.findNearestCommonDominator(Succ0, Succ1);
+
+  errs() << "Fission block: " << FissionBlock->getName() << "\n";
+  errs() << "Fusion block: " << FusionBlock->getName() << "\n";
+  errs() << "Successor 0: " << Succ0->getName() << "\n";
+  errs() << "Successor 1: " << Succ1->getName() << "\n";
+  errs() << "Value instruction: " << *ValInst << "\n";
 
   if (Succ0 == FusionBlock || Succ1 == FusionBlock) {
     errs() << "Fusion block is one of the successors, skipping\n";
@@ -73,6 +78,7 @@ bool isLoopBoundCondition(BranchInst *Branch, Value *Val, LoopInfo &LI,
     Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
     if (not UserInst)
       continue;
+    errs() << "User of value: " << *UserInst << "\n";
 
     if (isa<ZExtInst>(UserInst) or isa<SExtInst>(UserInst) or
         isa<TruncInst>(UserInst)) {
@@ -87,6 +93,18 @@ bool isLoopBoundCondition(BranchInst *Branch, Value *Val, LoopInfo &LI,
     }
   }
 
+  for (auto &Op : ValInst->operands()) {
+    Instruction *OpInst = dyn_cast<Instruction>(Op);
+    if (not OpInst)
+      continue;
+    errs() << "Operand instruction: " << *OpInst << "\n";
+    if (OpInst->hasMetadata("variable_annotation")) {
+      errs() << "  [FOUND] Cette instruction est une condition "
+             << "de sortie de boucle par variable_annotation !\n";
+      return true;
+    }
+  }
+
   auto IsBetweenBlocks = [&](BasicBlock *BB) {
     if (BB == FissionBlock || BB == FusionBlock)
       return true;
@@ -97,7 +115,7 @@ bool isLoopBoundCondition(BranchInst *Branch, Value *Val, LoopInfo &LI,
   };
 
   for (auto &UserInst : InstructionToTest) {
-    errs() << "User instruction: " << *UserInst << "\n";
+    errs() << "InstructionToTest  instruction: " << *UserInst << "\n";
     if (not UserInst)
       continue;
 
@@ -135,18 +153,6 @@ BasicBlock *getMergeBlock(BasicBlock *SplitBlock, PostDominatorTree &PDT) {
   return nullptr;
 }
 
-unsigned getMaxDepthRecursive(Loop *L) {
-  unsigned CurrentDepth = L->getLoopDepth();
-  unsigned MaxDepth = CurrentDepth;
-
-  for (Loop *SubLoop : L->getSubLoops()) {
-    unsigned SubDepth = getMaxDepthRecursive(SubLoop);
-    MaxDepth = std::max(MaxDepth, SubDepth);
-  }
-
-  return MaxDepth;
-}
-
 std::vector<Loop *> getAllSubLoops(Loop *L) {
   std::vector<Loop *> SubLoops;
   for (Loop *SubLoop : L->getSubLoops()) {
@@ -158,14 +164,16 @@ std::vector<Loop *> getAllSubLoops(Loop *L) {
   return SubLoops;
 }
 
-Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
+std::pair<Loop *, BasicBlock *>
+getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
   Instruction *Terminator = Fision->getTerminator();
   if (!Terminator)
-    return nullptr;
+    return {nullptr, nullptr};
 
   Loop *BaseLoop = LI.getLoopFor(Fision);
   unsigned BaseDepth = BaseLoop ? BaseLoop->getLoopDepth() : 0;
 
+  BasicBlock *BestCandidateBB = nullptr;
   Loop *BestCandidate = nullptr;
   unsigned MaxFoundDepth = BaseDepth;
 
@@ -209,13 +217,14 @@ Loop *getVersionedLoop(BasicBlock *Fision, BasicBlock *Fusion, LoopInfo &LI) {
     if (BranchMaxDepth > BaseDepth && BranchMaxDepth > MaxFoundDepth) {
       MaxFoundDepth = BranchMaxDepth;
       BestCandidate = BranchDeepestLoop;
+      BestCandidateBB = StartBB;
     } else if (BranchMaxDepth > BaseDepth && BranchMaxDepth == MaxFoundDepth) {
       llvm_unreachable("Multiple candidate loops with same depth found, "
                        "ambiguous versioned loop");
     }
   }
 
-  return BestCandidate;
+  return {BestCandidate, BestCandidateBB};
 }
 
 bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
@@ -250,6 +259,15 @@ bool isValidBranchInst(Instruction *Inst, LoopInfo &LI, DominatorTree &DT,
       return false;
     }
 
+    if (auto *VariableInst = dyn_cast<Instruction>(VariableOp)) {
+      if (VariableInst->hasMetadata("variable_annotation")) {
+        errs()
+            << "Variable operand has variable_annotation metadata, treating as "
+            << "loop bound condition\n";
+        return true;
+      }
+    }
+
     if (not isLoopBoundCondition(Branch, VariableOp, LI, DT, PDT)) {
       errs() << "Variable operand is not from a loop bound, skipping\n";
       return false;
@@ -273,47 +291,60 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI, PostDominatorTree &PDT,
     if (not isValidBranchInst(Term, LI, DT, PDT))
       continue;
 
+    auto *EndVersioningBB = getMergeBlock(&BB, PDT);
+    if (not EndVersioningBB)
+      llvm_unreachable("No merge block found for versioning, cannot proceed");
+
+    bool FoundMergeBlockAsSuccessor = false;
+    for (auto *SuccBB : successors(&BB)) {
+      if (EndVersioningBB == SuccBB) {
+        FoundMergeBlockAsSuccessor = true;
+        continue;
+      }
+    }
+    if (FoundMergeBlockAsSuccessor) {
+      errs() << "Merge block is a direct successor, skipping\n";
+      continue;
+    }
+
+    errs() << "EndVersioningBB: "
+           << (EndVersioningBB ? EndVersioningBB->getName() : "null") << "\n";
+
+    auto Versionned = getVersionedLoop(&BB, EndVersioningBB, LI);
+    BasicBlock *VersionnedBB = Versionned.second;
+    errs() << "VersionnedBB: "
+           << (VersionnedBB ? VersionnedBB->getName() : "null") << "\n";
+
+    // TODO use getTriangularLoops to check if the loop is triangular, and skip
     auto TriangularLoops = getTriangularLoops(LI, SE, DT);
+    errs() << "Triangular loops in the function: " << TriangularLoops.size()
+           << "\n";
+    for (auto *TriangularLoop : TriangularLoops) {
+      errs() << "Triangular loop: " << TriangularLoop->getName() << "\n";
+    }
     if (auto *L = LI.getLoopFor(&BB)) {
       errs() << "BB is inside a loop: " << L->getName() << "\n";
 
-      auto *EndVersioningBB = getMergeBlock(&BB, PDT);
-      errs() << "EndVersioningBB: "
-             << (EndVersioningBB ? EndVersioningBB->getName() : "null") << "\n";
-
-      if (not EndVersioningBB) {
-        errs() << "No merge block found, skipping\n";
-        continue;
-      }
-
-      Loop *VersionedLoop = getVersionedLoop(&BB, EndVersioningBB, LI);
+      Loop *VersionedLoop = Versionned.first;
       if (not VersionedLoop) {
         errs() << "No versioned loop found, skipping\n";
         continue;
       }
 
-      errs() << "Versioned loop: " << VersionedLoop->getName() << "\n ";
       auto SubLoops = getAllSubLoops(VersionedLoop);
       SubLoops.push_back(VersionedLoop);
-      for (auto *SubL : SubLoops) {
-        errs() << "\tSubLoop: " << SubL->getName() << "\n";
-      }
 
       bool IsVariantInAllSubLoops = false;
       for (auto *SubL : SubLoops) {
-        const SCEV *SubBackedgeCount = SE.getBackedgeTakenCount(SubL);
-        errs() << "\tSubLoop Backedge SCEV: " << *SubBackedgeCount << "\n";
-        if (SE.isLoopInvariant(SubBackedgeCount, L)) {
-          errs() << "\tBackedge count invariant pour " << SubL->getName()
-                 << "\n";
-        } else {
-          errs() << "\tBackedge count variant pour " << SubL->getName() << "\n";
+        errs() << "\tSubLoop: " << SubL->getName() << "\n";
+        if (std::find(TriangularLoops.begin(), TriangularLoops.end(), SubL) !=
+            TriangularLoops.end()) {
           IsVariantInAllSubLoops = true;
+          break;
         }
       }
-
       if (IsVariantInAllSubLoops) {
-        errs() << "\tBackedge count variant on passe.\n";
+        errs() << "\tLoop is triangular, skipping\n";
         continue;
       }
 
@@ -323,48 +354,26 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI, PostDominatorTree &PDT,
     errs() << "Terminator: " << *Term << "\n";
 
     if (BranchInst *Branch = dyn_cast<BranchInst>(Term)) {
-      Value *Condition = Branch->getCondition();
-      if (auto *ICmp = dyn_cast<ICmpInst>(Condition)) {
-        Value *LHS = ICmp->getOperand(0);
-        Value *RHS = ICmp->getOperand(1);
-        ICmpInst::Predicate Pred = ICmp->getPredicate();
-        errs() << "Removing unswitched branch: " << *ICmp << "\n";
-        errs() << "LHS: " << *LHS << "\n";
-        errs() << "RHS: " << *RHS << "\n";
-        errs() << "Predicate: " << Pred << "\n";
-
-        switch (Pred) {
-        case ICmpInst::ICMP_EQ: {
-          errs() << "on sup Branch " << *Branch << "\n";
-          errs() << "on branch to " << *Branch->getSuccessor(1) << "\n";
-          BasicBlock *ParentBlock = Branch->getParent();
-          BasicBlock *NextBB = Branch->getSuccessor(1);
-          BasicBlock *RemovedBlock = Branch->getSuccessor(0);
-
-          for (PHINode &Phi : RemovedBlock->phis()) {
-            int Idx = Phi.getBasicBlockIndex(ParentBlock);
-            if (Idx != -1) {
-              Phi.removeIncomingValue(Idx);
-            }
-          }
-
-          IRBuilder<> Builder(Branch);
-          ICmp->setPredicate(
-              CmpInst::getInversePredicate(ICmp->getPredicate()));
-          Value *Assume = Builder.CreateAssumption(ICmp);
-          LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
-          LLVM_DEBUG(errs() << "Removing branch to " << *Branch << "\n";);
-          BranchInst *NewBranch = BranchInst::Create(NextBB);
-          Branch->eraseFromParent();
-          NewBranch->insertInto(ParentBlock, ParentBlock->end());
-          break;
-        }
-        default: {
-          LLVM_DEBUG(errs() << "Unsupported predicate, skipping\n";);
-          break;
-        }
-        }
+      IRBuilder<> Builder(Branch);
+      Value *Condition = nullptr;
+      if (Branch->getSuccessor(0) == VersionnedBB) {
+        Condition = Builder.getTrue();
+      } else if (Branch->getSuccessor(1) == VersionnedBB) {
+        Condition = Builder.getFalse();
+      } else {
+        llvm_unreachable("VersionnedBB is not a successor of the branch");
       }
+
+      auto *ICmp = dyn_cast<ICmpInst>(Branch->getCondition());
+      ICmp->setMetadata("used_for_versioning",
+                        MDNode::get(ICmp->getContext(), {}));
+
+      ICmp->setPredicate(CmpInst::getInversePredicate(ICmp->getPredicate()));
+      Value *Assume = Builder.CreateAssumption(ICmp);
+      LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
+      LLVM_DEBUG(errs() << "Removing branch to " << *Branch << "\n";);
+
+      Branch->setCondition(Condition);
     }
   }
 }
