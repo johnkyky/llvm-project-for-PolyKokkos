@@ -2183,6 +2183,9 @@ void Scop::print(raw_ostream &OS, bool PrintInstructions) const {
       MAs.front()->print(OS);
       OS.indent(12) << "Execution Context: " << IAClass.ExecutionContext
                     << "\n";
+      for (auto *MA : MAs) {
+        MA->print(OS);
+      }
     }
   }
   OS.indent(4) << "}\n";
