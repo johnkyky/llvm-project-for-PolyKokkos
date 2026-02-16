@@ -21,14 +21,13 @@
 #include "polly/CodeGen/RuntimeDebugBuilder.h"
 #include "polly/Options.h"
 #include "polly/ScopInfo.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/SCEVValidator.h"
 #include "polly/Support/ScopHelper.h"
 #include "polly/Support/VirtualInstruction.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -1168,28 +1167,38 @@ Value *IslNodeBuilder::preloadInvariantLoad(const MemoryAccess &MA,
 
 bool IslNodeBuilder::preloadInvariantEquivClass(
     InvariantEquivClassTy &IAClass) {
-  // For an equivalence class of invariant loads we pre-load the representing
-  // element with the unified execution context. However, we have to map all
-  // elements of the class to the one preloaded load as they are referenced
-  // during the code generation and therefore need to be mapped.
+  errs() << "Polly: Preloading invariant load equivalence class for pointer "
+         << *IAClass.IdentifyingPointer << "\n";
+  // For an equivalence class of invariant loads we pre-load the
+  // representing element with the unified execution context. However,
+  // we have to map all elements of the class to the one preloaded
+  // load as they are referenced during the code generation and
+  // therefore need to be mapped.
   const MemoryAccessList &MAs = IAClass.InvariantAccesses;
-  if (MAs.empty())
+  if (MAs.empty()) {
+    errs() << "MAs empty\n";
     return true;
+  }
 
   MemoryAccess *MA = MAs.front();
   assert(MA->isArrayKind() && MA->isRead());
 
   // If the access function was already mapped, the preload of this equivalence
   // class was triggered earlier already and doesn't need to be done again.
-  if (ValueMap.count(MA->getAccessInstruction()))
+  if (ValueMap.count(MA->getAccessInstruction())) {
+    errs() << "ValueMap count\n";
     return true;
+  }
 
   // Check for recursion which can be caused by additional constraints, e.g.,
   // non-finite loop constraints. In such a case we have to bail out and insert
   // a "false" runtime check that will cause the original code to be executed.
   auto PtrId = std::make_pair(IAClass.IdentifyingPointer, IAClass.AccessType);
-  if (!PreloadedPtrs.insert(PtrId).second)
+  if (!PreloadedPtrs.insert(PtrId).second) {
+    errs() << "Polly: Detected recursive preload of invariant load "
+           << "equivalence class for pointer ";
     return false;
+  }
 
   // The execution context of the IAClass.
   isl::set &ExecutionCtx = IAClass.ExecutionContext;
@@ -1198,8 +1207,11 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
   // make sure it was preloaded already.
   auto *SAI = MA->getScopArrayInfo();
   if (auto *BaseIAClass = S.lookupInvariantEquivClass(SAI->getBasePtr())) {
-    if (!preloadInvariantEquivClass(*BaseIAClass))
+    if (!preloadInvariantEquivClass(*BaseIAClass)) {
+      errs() << "Polly: Failed to preload base pointer "
+             << "invariant load equivalence class.\n";
       return false;
+    }
 
     // After we preloaded the BaseIAClass we adjusted the BaseExecutionCtx and
     // we need to refine the ExecutionCtx.
@@ -1215,8 +1227,11 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
     findValues(Dim, SE, Values);
     for (auto *Val : Values) {
       if (auto *BaseIAClass = S.lookupInvariantEquivClass(Val)) {
-        if (!preloadInvariantEquivClass(*BaseIAClass))
+        if (!preloadInvariantEquivClass(*BaseIAClass)) {
+          errs() << "Polly: Failed to preload dimension size "
+                 << "invariant load equivalence class.\n";
           return false;
+        }
 
         // After we preloaded the BaseIAClass we adjusted the BaseExecutionCtx
         // and we need to refine the ExecutionCtx.
@@ -1230,8 +1245,10 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
   Type *AccInstTy = AccInst->getType();
 
   Value *PreloadVal = preloadInvariantLoad(*MA, ExecutionCtx.copy());
-  if (!PreloadVal)
+  if (!PreloadVal) {
+    errs() << "Polly: Failed to preload invariant load.\n";
     return false;
+  }
 
   for (const MemoryAccess *MA : MAs) {
     Instruction *MAAccInst = MA->getAccessInstruction();
@@ -1290,6 +1307,7 @@ bool IslNodeBuilder::preloadInvariantEquivClass(
         std::make_pair(Alloca, std::move(EscapeUsers));
   }
 
+  errs() << "on passe tout les tests\n";
   return true;
 }
 
@@ -1366,14 +1384,90 @@ bool IslNodeBuilder::preloadInvariantLoads() {
   if (InvariantEquivClasses.empty())
     return true;
 
+  errs() << "Preloading invariant loads...\n";
+  errs() << "Number of invariant equivalence classes: "
+         << InvariantEquivClasses.size() << "\n";
+
   BasicBlock *PreLoadBB = SplitBlock(Builder.GetInsertBlock(),
                                      Builder.GetInsertPoint(), GenDT, GenLI);
   PreLoadBB->setName("polly.preload.begin");
   Builder.SetInsertPoint(PreLoadBB, PreLoadBB->begin());
 
-  for (auto &IAClass : InvariantEquivClasses)
-    if (!preloadInvariantEquivClass(IAClass))
+  std::string StrTest;
+  llvm::raw_string_ostream OS(StrTest);
+  OS << InvariantEquivClasses.size();
+  RuntimeDebugBuilder::createCPUPrinter(
+      Builder, "InvariantEquivClasses Size : ", StrTest, "\n");
+
+  for (auto &IAClass : InvariantEquivClasses) {
+    errs().indent(2) << "Preloading invariant equivalence class for pointer "
+                     << *IAClass.IdentifyingPointer << "\n";
+    errs().indent(2) << "set " << IAClass.ExecutionContext << "\n";
+
+    for (auto *MA : IAClass.InvariantAccesses) {
+      errs().indent(4) << *MA->getAccessInstruction() << "\n";
+    }
+
+    std::set<Value *> PrintedValues;
+
+    std::function<void(const SCEV *)> ExploreAndPrint = [&](const SCEV *S) {
+      if (auto *SU = dyn_cast<SCEVUnknown>(S)) {
+        Value *V = SU->getValue();
+
+        if (PrintedValues.find(V) == PrintedValues.end()) {
+          PrintedValues.insert(V);
+
+          std::string Name;
+          llvm::raw_string_ostream OS(Name);
+          V->printAsOperand(OS, true);
+
+          RuntimeDebugBuilder::createCPUPrinter(Builder, "  -> Var ", Name,
+                                                " = ", V, "\n");
+        }
+        return;
+      }
+
+      if (auto *NAry = dyn_cast<SCEVNAryExpr>(S)) {
+        for (const SCEV *Op : NAry->operands()) {
+          ExploreAndPrint(Op);
+        }
+      } else if (auto *Cast = dyn_cast<SCEVCastExpr>(S)) {
+        ExploreAndPrint(Cast->getOperand());
+      } else if (auto *UDiv = dyn_cast<SCEVUDivExpr>(S)) {
+        ExploreAndPrint(UDiv->getLHS());
+        ExploreAndPrint(UDiv->getRHS());
+      }
+    };
+
+    std::string Str;
+    llvm::raw_string_ostream OS(Str);
+
+    OS << "\nPointer : " << *IAClass.IdentifyingPointer << "\n    "
+       << IAClass.ExecutionContext << "  ";
+    for (auto *MA : IAClass.InvariantAccesses) {
+      OS << "\n    ";
+      OS << *MA->getAccessInstruction();
+    }
+    OS << "\n";
+
+    std::string VarName = OS.str();
+
+    RuntimeDebugBuilder::createCPUPrinter(Builder, VarName,
+                                          "--- Valeurs des composants---\n");
+    ExploreAndPrint(IAClass.IdentifyingPointer);
+    RuntimeDebugBuilder::createCPUPrinter(Builder,
+                                          "------------------------------\n");
+    if (!preloadInvariantEquivClass(IAClass)) {
+      errs() << "failed\n";
       return false;
+    }
+    RuntimeDebugBuilder::createCPUPrinter(Builder, "Juste apres\n");
+
+    errs() << "succeeded\n";
+    errs() << "\n\n";
+  }
+  RuntimeDebugBuilder::createCPUPrinter(Builder,
+                                        "Polly: Apres invariant loads\n");
 
   return true;
 }
