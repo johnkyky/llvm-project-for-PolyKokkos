@@ -126,15 +126,20 @@ unsigned getValidCondition(const Instruction *LeftOp,
 void removeLoopBoundConditions(Function &F,
                                const SmallVector<LoopBoundT, 4> LoopBounds) {
 
-  auto CheckInstIsLoopBounds = [&](const Instruction *LHSInst,
-                                   const Instruction *RHSInst,
+  auto CheckInstIsLoopBounds = [&](const Value *LHS, const Value *RHS,
                                    const ICmpInst *ICmp) {
-    const auto *ItLeft =
-        std::find_if(LoopBounds.begin(), LoopBounds.end(),
-                     [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
-    const auto *ItRight =
-        std::find_if(LoopBounds.begin(), LoopBounds.end(),
-                     [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
+    const auto *LHSInst = dyn_cast_or_null<Instruction>(LHS);
+    const auto *RHSInst = dyn_cast_or_null<Instruction>(RHS);
+
+    auto *ItLeft = LoopBounds.end();
+    auto *ItRight = LoopBounds.end();
+
+    if (LHSInst)
+      ItLeft = std::find_if(LoopBounds.begin(), LoopBounds.end(),
+                            [=](LoopBoundT LB) { return LB.Inst == LHSInst; });
+    if (RHSInst)
+      ItRight = std::find_if(LoopBounds.begin(), LoopBounds.end(),
+                             [=](LoopBoundT LB) { return LB.Inst == RHSInst; });
 
     if ((ItLeft == LoopBounds.end()) xor (ItRight == LoopBounds.end())) {
       return ICmp->hasMetadata("old_loop_bound");
@@ -158,10 +163,10 @@ void removeLoopBoundConditions(Function &F,
         Value *RHS = ICmp->getOperand(1);
         ICmpInst::Predicate Pred = ICmp->getPredicate();
 
-        const auto *LHSInst = dyn_cast<Instruction>(LHS);
-        const auto *RHSInst = dyn_cast<Instruction>(RHS);
+        errs() << "LHS : " << *LHS << "\n";
+        errs() << "RHS : " << *RHS << "\n";
 
-        if (not CheckInstIsLoopBounds(LHSInst, RHSInst, ICmp))
+        if (not CheckInstIsLoopBounds(LHS, RHS, ICmp))
           continue;
 
         auto *NextBB = getTrueCondition(Branch, LHS, Pred, RHS, ICmp);
@@ -170,7 +175,7 @@ void removeLoopBoundConditions(Function &F,
         Value *Assume = Builder.CreateAssumption(ICmp);
         LLVM_DEBUG(errs() << "Registering assumption: " << *Assume << "\n");
 
-        BranchInst::Create(NextBB, Branch);
+        BranchInst::Create(NextBB, Branch->getIterator());
         LLVM_DEBUG(errs() << "Removing loop bound condition " << *ICmp << "\n");
         Branch->eraseFromParent();
       } else if (auto *Select = dyn_cast<SelectInst>(Cond)) {
@@ -211,13 +216,13 @@ void removeLoopBoundConditions(Function &F,
           LLVM_DEBUG(errs() << "Registering assumption: " << *Assume1 << "\n");
           LLVM_DEBUG(errs() << "Registering assumption: " << *Assume2 << "\n");
 
-          BranchInst::Create(NextBB, Branch);
+          BranchInst::Create(NextBB, Branch->getIterator());
           LLVM_DEBUG(errs() << "Removing loop bound condition " << *ICmp1
                             << "   " << *ICmp2 << "\n");
           Branch->eraseFromParent();
         }
       } else if (isa<FCmpInst>(Cond)) {
-        // Do nothing for floating point comparisons for now
+        // Do nothing for floating point comparisons
       } else {
         std::string Msg =
             "Unknown branch condition type : " + Cond->getName().str();
@@ -249,6 +254,7 @@ Value *getBooleanValue(ICmpInst *ICmp) {
     return ConstantInt::getTrue(ICmp->getContext());
   }
   default:
+    errs() << *ICmp->getParent() << "\n";
     llvm_unreachable("Unsupported loop bound condition in getBooleanValue");
     break;
   }
@@ -256,148 +262,134 @@ Value *getBooleanValue(ICmpInst *ICmp) {
   return ConstantInt::getFalse(ICmp->getContext());
 }
 
+bool isValidBindOp(const BinaryOperator *BinOp) {
+  bool HasConstant = false;
+  for (auto &Op : BinOp->operands()) {
+    if (isa<ConstantInt>(Op)) {
+      HasConstant = true;
+    }
+  }
+
+  return HasConstant;
+}
+
 void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
   struct HoistedData {
-    CallInst *Call;
-    BinaryOperator *Operation;
     ICmpInst *ICmp;
-    bool IsLoopBound = false;
-  };
-
-  auto Lambda = [&](ICmpInst *ICmp, CallInst *CallInst, BinaryOperator *BinOp,
-                    SmallVectorImpl<HoistedData> &ToChangee) {
-    bool HasConstant = false;
-    {
-      for (auto &Op : ICmp->operands()) {
-        Instruction *Tmp = BinOp ? dyn_cast<Instruction>(BinOp)
-                                 : dyn_cast<Instruction>(CallInst);
-        if (Op == Tmp)
-          continue;
-        if (isa<ConstantInt>(Op)) {
-          HasConstant = true;
-        }
-      }
-    }
-    bool IsLoopBound = false;
-    {
-      for (auto &Op : CallInst->operands()) {
-        auto *Inst = dyn_cast<Instruction>(Op);
-        if (not Inst)
-          continue;
-        errs() << "Checking metadata for instruction: " << *Inst << "\n";
-
-        if (Inst->hasMetadata("loop_bound_information")) {
-          errs() << "Found loop bound metadata on instruction: " << *Inst
-                 << "\n";
-          IsLoopBound = true;
-          break;
-        }
-      }
-    }
-    if (not HasConstant and not IsLoopBound)
-      return;
-
-    if (HasConstant) {
-      Value *BooleanVal2 = getBooleanValue(ICmp);
-      ICmp->replaceAllUsesWith(BooleanVal2);
-      ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp});
-    }
-    if (IsLoopBound) {
-      ToChangee.push_back(HoistedData{CallInst, BinOp, ICmp, true});
-    }
-
-    LLVM_DEBUG(errs() << "Removing loop bound variable condition " << *ICmp
-                      << "\n";);
+    Instruction *VarLoopBound;
+    BinaryOperator *BinOp;
   };
 
   // useful with the annotation of loop bounds inside parallel_for with
   // KOKKOS_LOOP_BOUND
   SmallVector<HoistedData, 2> ToChangee;
   for (auto &BB : F) {
-    for (auto It = BB.begin(); It != BB.end();) {
-      Instruction *I = &*It;
-      ++It;
-      auto [CallInst, StrRef] = polly::isAnnotationInstruction(I, "var ");
-      if (not CallInst)
+    for (auto &I : BB) {
+      if (not I.hasMetadata("cond_variable_annotation") or
+          I.hasMetadata("used_for_versioning"))
         continue;
 
-      bool IsOnlyUseForAssumption = true;
-      for (User *U : CallInst->users()) {
-        if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
-          for (auto *UserOfICmp : ICmp->users()) {
-            if (not isa<AssumeInst>(UserOfICmp)) {
-              IsOnlyUseForAssumption = false;
-            }
-          }
-        } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
-          for (auto *UserOfBinOp : BinOp->users()) {
-            if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
-              for (auto *UserOfICmp : ICmp->users()) {
-                if (not isa<AssumeInst>(UserOfICmp)) {
-                  IsOnlyUseForAssumption = false;
-                }
-              }
-            } else {
-              IsOnlyUseForAssumption = false;
-            }
-          }
-        } else {
-          IsOnlyUseForAssumption = false;
+      auto *ICmp = dyn_cast<ICmpInst>(&I);
+      if (not ICmp)
+        continue;
+
+      errs() << "\n\nFound loop bound variable condition: " << *ICmp << "\n";
+
+      HoistedData HD{ICmp, nullptr, nullptr};
+
+      bool HasConstant = false;
+      bool HasBinOp = false;
+      bool HasLoopBound = false;
+
+      auto *Op0 = ICmp->getOperand(0);
+      errs() << "Operand 0: " << *Op0 << "\n";
+      if (auto *BinOp = dyn_cast<BinaryOperator>(Op0)) {
+        if (isValidBindOp(BinOp)) {
+          HD.BinOp = BinOp;
+          auto *LoopBound = isa<ConstantInt>(BinOp->getOperand(0))
+                                ? BinOp->getOperand(1)
+                                : BinOp->getOperand(0);
+          HD.VarLoopBound = dyn_cast_or_null<Instruction>(LoopBound);
+          HasBinOp = true;
         }
+      } else if (isa<ConstantInt>(Op0)) {
+        HasConstant = true;
+      } else {
+        HD.VarLoopBound = dyn_cast_or_null<Instruction>(Op0);
+        HasLoopBound = true;
       }
-      if (IsOnlyUseForAssumption)
-        continue;
 
-      errs() << "Processing annotation call: " << *CallInst << "\n";
+      errs() << "Has constant: " << HasConstant << "\n";
+      errs() << "Has binary operator: " << HasBinOp << "\n";
+      errs() << "Has loop bound variable: " << HasLoopBound << "\n";
 
-      for (User *U : CallInst->users()) {
-        if (auto *ICmp = dyn_cast<ICmpInst>(U)) {
-          Lambda(ICmp, CallInst, nullptr, ToChangee);
-        } else if (auto *BinOp = dyn_cast<BinaryOperator>(U)) {
-          errs() << "Binary operator found: " << *BinOp << "\n";
-          // find the constant
-          unsigned ConstantIndex = 2;
-          for (unsigned I = 0; I < 2; ++I) {
-            if (isa<ConstantInt>(BinOp->getOperand(I)))
-              ConstantIndex = I;
-          }
-          if (ConstantIndex == 2)
+      auto *Op1 = ICmp->getOperand(1);
+      errs() << "Operand 1: " << *Op1 << "\n";
+      if (auto *BinOp = dyn_cast<BinaryOperator>(Op1)) {
+        if (isValidBindOp(BinOp)) {
+          if (not HasConstant) {
+            errs() << "Invalid loop bound condition with binary "
+                      "operator without constant\n";
             continue;
-
-          for (auto *UserOfBinOp : BinOp->users()) {
-            if (auto *ICmp = dyn_cast<ICmpInst>(UserOfBinOp)) {
-              Lambda(ICmp, CallInst, BinOp, ToChangee);
-            }
           }
+
+          auto *LoopBound = isa<ConstantInt>(BinOp->getOperand(0))
+                                ? BinOp->getOperand(1)
+                                : BinOp->getOperand(0);
+          HD.VarLoopBound = dyn_cast_or_null<Instruction>(LoopBound);
+          HD.BinOp = BinOp;
         }
+      } else if (isa<ConstantInt>(Op1)) {
+        if (not HasBinOp and not HasLoopBound) {
+          errs() << "Invalid loop bound condition with constant "
+                    "without binary operator or "
+                    "loop bound variable\n";
+          continue;
+        }
+        HasConstant = true;
+      } else {
+        if (not HasConstant) {
+          continue;
+          errs() << "Invalid loop bound condition with variable "
+                    "without constant\n";
+        }
+        HD.VarLoopBound = dyn_cast_or_null<Instruction>(Op1);
       }
+
+      errs() << "Processing variable loop bound condition: " << *ICmp << "\n";
+
+      if (not HD.VarLoopBound)
+        continue;
+      if (HD.VarLoopBound->hasMetadata("loop_bound_information"))
+        continue;
+
+      if (HasConstant)
+        ToChangee.push_back(HD);
+
+      Value *BooleanVal = getBooleanValue(ICmp);
+      errs() << "on replace all uses of " << *ICmp << " with " << *BooleanVal
+             << "\n";
+      ICmp->replaceAllUsesWith(BooleanVal);
     }
   }
 
-  for (auto &[CallInst, BinaryOp, ICmp, IsLoopBound] : ToChangee) {
-    // replace the annotation value with the original value
-    auto *Val = CallInst->getArgOperand(0);
-    CallInst->replaceAllUsesWith(Val);
+  for (auto &[ICmp, VarLoopBound, BinaryOp] : ToChangee) {
+    errs() << "Loop bound variable condition to remove: " << *ICmp << "\n";
+    errs() << "  Variable loop bound: " << *VarLoopBound << "\n";
+    if (BinaryOp)
+      errs() << "  Binary operator: " << *BinaryOp << "\n";
+  }
 
-    if (IsLoopBound) {
-      errs() << "Skipping assumption creation for loop bound variable: "
-             << *ICmp << "\n";
-      continue;
-    }
-
-    auto *ValInst = dyn_cast_or_null<Instruction>(Val);
-    if (not ValInst)
-      llvm_unreachable("Expected instruction");
-
+  for (auto &[ICmp, VarLoopBound, BinaryOp] : ToChangee) {
     // Clone the instruction comparing
     auto *NewICmpInst = ICmp->clone();
     auto *NewICmp = dyn_cast_or_null<ICmpInst>(NewICmpInst);
     NewICmp->setName("var_loop_bound_icmp");
-    NewICmp->insertAfter(ValInst->getNextNode());
+    NewICmp->insertAfter(VarLoopBound->getNextNode());
 
     // Assumption creation and insertion
     auto Builder = IRBuilder<>(NewICmp->getNextNode());
-    Value *Assumption = Builder.CreateAssumption(NewICmp);
+    auto *Assumption = Builder.CreateAssumption(NewICmp);
     auto *AssumptionInst = dyn_cast_or_null<Instruction>(Assumption);
     auto *AssumptionCall = dyn_cast_or_null<llvm::AssumeInst>(AssumptionInst);
     if (not AssumptionInst or not AssumptionCall)
@@ -408,7 +400,7 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
     if (BinaryOp) {
       auto *NewBinaryOp = BinaryOp->clone();
       NewBinaryOp->setName("var_loop_bound_binop");
-      NewBinaryOp->insertBefore(NewICmp);
+      NewBinaryOp->insertBefore(NewICmp->getIterator());
 
       unsigned ConstantIndexCmp = 2;
       for (unsigned I = 0; I < 2; ++I) {
@@ -439,8 +431,30 @@ RemoveLoopBoundConditionPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto LBA = LoopBoundAnalysis().run(F, AM);
   LLVM_DEBUG(errs() << LBA << "\n";);
   removeLoopBoundConditions(F, LBA);
-  auto AC = AssumptionAnalysis().run(F, AM);
+  auto AC = AM.getResult<AssumptionAnalysis>(F);
   removeLoopBoundVarConditions(F, AC);
+
+  auto Anno = ExtractAnnotatedSizes().run(F, AM);
+  for (const auto &[InstArray, Data] : Anno) {
+    bool SkippedFirstIt = false;
+    for (auto *SizeInst : Data.Sizes) {
+      if (not SkippedFirstIt) {
+        SkippedFirstIt = true;
+        continue;
+      }
+
+      // create an assume instruction that the size is > 0
+      IRBuilder<> Builder(SizeInst->getNextNode());
+      auto *SizeType = SizeInst->getType();
+      auto *Zero = ConstantInt::get(SizeType, 0);
+      auto *Cond = Builder.CreateICmpSGT(SizeInst, Zero, "array_size_positive");
+      auto *Assume = Builder.CreateAssumption(Cond);
+      auto *AI = dyn_cast_or_null<AssumeInst>(Assume);
+      AC.registerAssumption(AI);
+      Assume->setMetadata("array_size_positive",
+                          MDNode::get(SizeInst->getContext(), {}));
+    }
+  }
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
