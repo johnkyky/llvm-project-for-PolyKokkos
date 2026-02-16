@@ -15,6 +15,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -96,6 +97,87 @@ void fusionVarAnnotations(Function &F, DominatorTree &DT) {
   }
 }
 
+ICmpInst *findICmpUser(Instruction *Inst) {
+  SmallVector<Instruction *, 8> Worklist;
+  Worklist.push_back(Inst);
+
+  SmallPtrSet<Instruction *, 8> Visited;
+
+  while (!Worklist.empty()) {
+    Instruction *Curr = Worklist.pop_back_val();
+    if (!Visited.insert(Curr).second)
+      continue;
+
+    for (User *U : Curr->users()) {
+      Instruction *UserInst = dyn_cast<Instruction>(U);
+      if (!UserInst)
+        continue;
+
+      if (auto *ICI = dyn_cast<ICmpInst>(UserInst)) {
+        return ICI;
+      }
+
+      if (UserInst->isBinaryOp()) {
+        Worklist.push_back(UserInst);
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+bool onlyUseInsideBlock(Instruction *Inst) {
+  BasicBlock *BB = Inst->getParent();
+  for (User *U : Inst->users()) {
+    Instruction *UserInst = dyn_cast<Instruction>(U);
+    if (!UserInst)
+      continue;
+    if (UserInst->getParent() != BB)
+      return false;
+  }
+  return true;
+}
+
+void removeVarAnnotations(Function &F) {
+  auto Annotations = findVarInstructions(F);
+
+  SmallVector<CallInst *, 4> ToRemove;
+  SmallVector<std::pair<ICmpInst *, CallInst *>, 4> ToAnnotate;
+
+  for (auto &[Inst, Name] : Annotations) {
+    for (auto *User : Inst->users()) {
+      if (auto *CallInst = dyn_cast<llvm::CallInst>(User)) {
+        const Function *Callee = CallInst->getCalledFunction();
+        if (Callee and Callee->getName().starts_with("llvm.annotation")) {
+          ToRemove.push_back(CallInst);
+
+          auto *ICmp = findICmpUser(CallInst);
+          if (ICmp and ICmp->getParent() == CallInst->getParent() and
+              onlyUseInsideBlock(ICmp)) {
+            ToAnnotate.push_back({ICmp, CallInst});
+          }
+        }
+      }
+    }
+  }
+
+  for (auto *CI : ToRemove) {
+    errs() << "Removing annotation call: " << *CI << "\n";
+  }
+  for (auto &[ICmp, CallInst] : ToAnnotate) {
+    errs() << "Annotating instruction: " << *ICmp << "\n";
+  }
+
+  for (auto *CI : ToRemove) {
+    auto *Val = CI->getArgOperand(0);
+    CI->replaceAllUsesWith(Val);
+  }
+  for (auto &[ICmp, CallInst] : ToAnnotate) {
+    ICmp->setMetadata("cond_variable_annotation",
+                      MDNode::get(ICmp->getContext(), {}));
+  }
+}
+
 } // namespace
 
 SmallVector<std::pair<Instruction *, StringRef>, 2>
@@ -135,6 +217,8 @@ PreservedAnalyses VarFusionPass::run(Function &F, FunctionAnalysisManager &FM) {
   auto &DT = FM.getResult<DominatorTreeAnalysis>(F);
 
   fusionVarAnnotations(F, DT);
+
+  removeVarAnnotations(F);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error(
