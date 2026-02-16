@@ -1254,7 +1254,8 @@ bool ScopDetection::isValidMemoryAccess(MemAccInst Inst,
 
   BasePointer = dyn_cast<SCEVUnknown>(SE.getPointerBase(AccessFunction));
 
-  if (not L) {
+  // TODO: false condition because bug in code generation for invariant loads
+  if (false and not L) {
     if (auto *LI = dyn_cast<LoadInst>(Inst)) {
       Context.RequiredILS.insert(LI);
       return true;
