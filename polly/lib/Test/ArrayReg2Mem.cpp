@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ArrayReg2Mem.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/BasicBlock.h"
@@ -63,26 +64,79 @@ Value *findInvariantStorePointer(Value *Val, BasicBlock *BB, DominatorTree &DT,
   return nullptr;
 }
 
+bool isInvariantPtr(Value *Ptr, DominatorTree &DT, BasicBlock *LoopHeader) {
+  if (isa<Argument>(Ptr))
+    return true;
+
+  if (isa<Constant>(Ptr))
+    return true;
+
+  if (auto *InstPtr = dyn_cast<Instruction>(Ptr)) {
+    if (DT.dominates(InstPtr, LoopHeader))
+      return true;
+
+    if (auto *Load = dyn_cast<LoadInst>(InstPtr)) {
+      Value *LoadAddr = Load->getPointerOperand();
+
+      Value *Current = LoadAddr;
+      while (Current) {
+        if (isa<Argument>(Current))
+          return true;
+
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(Current)) {
+          Current = GEP->getPointerOperand();
+          continue;
+        }
+
+        if (auto *Cast = dyn_cast<CastInst>(Current)) {
+          Current = Cast->getOperand(0);
+          continue;
+        }
+
+        break;
+      }
+    }
+  }
+  return false;
+}
+
 /* Check if the given PHI node (Phi) has a relation to stores in its
    incoming blocks that would allow us to demote it to memory.
    If such a relation is found, return the pointer operand of the store.
    Otherwise, return nullptr.
 */
-Value *checkPhiStoreRelation(PHINode *Phi, DominatorTree &DT) {
+Value *checkPhiStoreRelation(PHINode *Phi, DominatorTree &DT,
+                             ScalarEvolution &SE) {
   if (Phi->getNumIncomingValues() != 2)
     return nullptr;
 
   BasicBlock *Header = Phi->getParent();
 
-  Value *InVals[2];
-  BasicBlock *InBlocks[2];
+  Value *InVals[2] = {nullptr, nullptr};
+  BasicBlock *InBlocks[2] = {nullptr, nullptr};
   Value *StorePtrs[2] = {nullptr, nullptr};
 
   for (int I = 0; I < 2; ++I) {
     InVals[I] = Phi->getIncomingValue(I);
     InBlocks[I] = Phi->getIncomingBlock(I);
-    StorePtrs[I] =
+
+    Value *FoundPtr =
         findInvariantStorePointer(InVals[I], InBlocks[I], DT, Header);
+
+    if (!FoundPtr) {
+      if (auto *Load = dyn_cast<LoadInst>(InVals[I])) {
+        Value *PtrOperand = Load->getPointerOperand();
+
+        // On vérifie que ce pointeur est valide pour toute la boucle
+        if (isInvariantPtr(PtrOperand, DT, Header)) {
+          FoundPtr = PtrOperand;
+          errs().indent(6) << "-> Found Load from Pointer: " << *FoundPtr
+                           << "\n";
+        }
+      }
+    }
+
+    StorePtrs[I] = FoundPtr;
   }
 
   for (int I = 0; I < 2; ++I) {
@@ -117,6 +171,8 @@ Value *checkPhiStoreRelation(PHINode *Phi, DominatorTree &DT) {
 
   for (int I = 0; I < 2; ++I) {
     if (auto *Load = dyn_cast<LoadInst>(InVals[I])) {
+      errs().indent(6) << "Incoming value " << I << " is a load: " << *Load
+                       << "\n";
       Value *LoadPtr = Load->getPointerOperand();
       int Other = 1 - I;
       if (StorePtrs[Other] && StorePtrs[Other] == LoadPtr) {
@@ -125,6 +181,7 @@ Value *checkPhiStoreRelation(PHINode *Phi, DominatorTree &DT) {
     }
   }
 
+  errs().indent(4) << "No suitable store relation found for PHI.\n";
   return nullptr;
 }
 
@@ -137,14 +194,44 @@ void materializePhi(PHINode *Phi, DominatorTree &DT, LoopInfo &LI) {
   AllocaInst *Alloca = BuilderEntry.CreateAlloca(Phi->getType(), nullptr,
                                                  Phi->getName() + ".addr");
 
+  errs() << "Materializing PHI: " << *Phi
+         << " into memory with alloca: " << *Alloca << "\n";
+
   for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+    errs() << "Processing incoming value " << I << ": "
+           << *Phi->getIncomingValue(I)
+           << " from block: " << Phi->getIncomingBlock(I)->getName() << "\n";
     Value *Val = Phi->getIncomingValue(I);
     BasicBlock *IncomingBB = Phi->getIncomingBlock(I);
 
     Instruction *TI = IncomingBB->getTerminator();
-    IRBuilder<> BuilderStore(TI);
-    BuilderStore.CreateStore(Val, Alloca);
+    IRBuilder<> Builder(TI);
+    auto *S = Builder.CreateStore(Val, Alloca);
+    errs() << "Inserted store of " << *Val << " to " << *Alloca << " in " << *S
+           << "\n";
   }
+
+  Instruction *IncomingInst0 =
+      dyn_cast_or_null<Instruction>(Phi->getIncomingValue(0));
+  Instruction *IncomingInst1 =
+      dyn_cast_or_null<Instruction>(Phi->getIncomingValue(1));
+  Value *AccumulatorResult = nullptr;
+
+  if (not IncomingInst0 and not IncomingInst1) {
+    llvm_unreachable(
+        "Expected both incoming values to be instructions for PHI");
+  } else if (IncomingInst0 and not IncomingInst1) {
+    AccumulatorResult = IncomingInst0;
+  } else if (not IncomingInst0 and IncomingInst1) {
+    AccumulatorResult = IncomingInst1;
+  } else {
+    AccumulatorResult = DT.dominates(IncomingInst0, IncomingInst1)
+                            ? Phi->getIncomingValue(1)
+                            : Phi->getIncomingValue(0);
+  }
+
+  assert(AccumulatorResult &&
+         "Expected at least one non-constant incoming value for PHI");
 
   IRBuilder<> BuilderLoad(Phi->getParent(),
                           Phi->getParent()->getFirstInsertionPt());
@@ -152,6 +239,37 @@ void materializePhi(PHINode *Phi, DominatorTree &DT, LoopInfo &LI) {
                                           Phi->getName() + ".reload");
 
   Phi->replaceAllUsesWith(Load);
+
+  for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+    Value *Val = Phi->getIncomingValue(I);
+    Instruction *ValInst = dyn_cast_or_null<Instruction>(Val);
+
+    BasicBlock *IncomingBB = Phi->getParent();
+    errs() << "IncomingBB => " << IncomingBB->getName() << "\n";
+
+    if (ValInst) {
+      for (auto *U : ValInst->users()) {
+        errs() << "Checking use: " << *U << "\n";
+        auto *UserInst = dyn_cast<Instruction>(U);
+        if (not UserInst)
+          continue;
+        if (UserInst->getParent() != IncomingBB) {
+          errs().indent(6) << "Use in different block: " << *UserInst << "\n";
+          errs().indent(20)
+              << "BB -> " << UserInst->getParent()->getName() << "\n";
+          IRBuilder<> Builder(UserInst->getParent(),
+                              UserInst->getParent()->getFirstInsertionPt());
+          auto *L = Builder.CreateLoad(ValInst->getType(), Alloca,
+                                       Val->getName() + ".reloadoutside");
+          UserInst->replaceUsesOfWith(AccumulatorResult, L);
+          if (AccumulatorResult)
+            errs() << "AccumulatorResult: " << *AccumulatorResult << "\n";
+          else
+            errs() << "AccumulatorResult: nullptr\n";
+        }
+      }
+    }
+  }
 }
 
 void demoteNonIndexPhis(Function &F, LoopInfo &LI, ScalarEvolution &SE,
@@ -185,51 +303,80 @@ void demoteNonIndexPhis(Function &F, LoopInfo &LI, ScalarEvolution &SE,
   for (auto *Phi : PhisToDemote) {
     errs().indent(2) << "PHI to demote: " << *Phi << "\n";
   }
+  errs() << "\n\n";
 
   SmallVector<PHINode *, 0> DeadPhis;
   for (auto *Phi : PhisToDemote) {
     errs() << "Processing PHI: " << *Phi << "\n";
 
-    Value *Ptr = checkPhiStoreRelation(Phi, DT);
+    Value *Ptr = checkPhiStoreRelation(Phi, DT, SE);
 
     if (Ptr) {
       errs().indent(2) << "Found Existing Pointer for PHI: " << *Ptr << "\n";
-      bool PointerIsSafe = true;
 
-      if (auto *InstPtr = dyn_cast<Instruction>(Ptr)) {
-        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
-          BasicBlock *InBlock = Phi->getIncomingBlock(I);
-          if (!DT.dominates(InstPtr, InBlock->getTerminator())) {
-            PointerIsSafe = false;
-            break;
+      for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+        Value *InVal = Phi->getIncomingValue(I);
+        BasicBlock *InBlock = Phi->getIncomingBlock(I);
+
+        bool AlreadyInMemory = false;
+        if (auto *InLoad = dyn_cast<LoadInst>(InVal)) {
+          if (InLoad->getPointerOperand() == Ptr) {
+            AlreadyInMemory = true;
           }
+        }
+
+        if (!AlreadyInMemory) {
+          Instruction *Terminator = InBlock->getTerminator();
+          IRBuilder<> BuilderStore(Terminator);
+          BuilderStore.CreateStore(InVal, Ptr);
+
+          errs().indent(4) << "Inserted Store in block " << InBlock->getName()
+                           << "\n";
+        } else {
+          errs().indent(4)
+              << "Incoming value already loaded from pointer in block "
+              << InBlock->getName() << "\n";
         }
       }
 
-      if (PointerIsSafe) {
-        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
-          Value *InVal = Phi->getIncomingValue(I);
-          if (isa<Constant>(InVal)) {
-            BasicBlock *InBlock = Phi->getIncomingBlock(I);
-            Instruction *Terminator = InBlock->getTerminator();
+      IRBuilder<> BuilderLoad(Phi->getParent(),
+                              Phi->getParent()->getFirstInsertionPt());
 
-            IRBuilder<> ConstBuilder(Terminator);
-            ConstBuilder.CreateStore(InVal, Ptr);
+      LoadInst *NewLoad = BuilderLoad.CreateLoad(Phi->getType(), Ptr,
+                                                 Phi->getName() + ".demoted");
 
-            errs().indent(2) << "Safe Store for constant: " << *InVal << "\n";
-          }
-        }
-      }
+      Phi->replaceAllUsesWith(NewLoad);
+
+      DeadPhis.push_back(Phi);
+
     } else {
       errs().indent(2) << "Materializing PHI to New Alloca: " << *Phi << "\n";
       materializePhi(Phi, DT, LI);
       DeadPhis.push_back(Phi);
     }
+    errs() << "\n\n";
   }
 
   for (auto *Phi : DeadPhis) {
     Phi->eraseFromParent();
   }
+}
+
+SmallVector<Instruction *, 2> getRealUsesInBlock(Instruction *Val,
+                                                 BasicBlock *BB) {
+  if (isa<Constant>(Val)) {
+    return {};
+  }
+
+  SmallVector<Instruction *, 2> Res;
+  for (auto *U : Val->users()) {
+    if (Instruction *Inst = dyn_cast<Instruction>(U)) {
+      if (Inst and Inst->getParent() == BB and isa<StoreInst>(Inst)) {
+        Res.push_back(Inst);
+      }
+    }
+  }
+  return Res;
 }
 
 /* Demote loads that have multiple uses within the same basic block by
@@ -245,6 +392,7 @@ void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       continue;
 
     SmallVector<LoadInst *, 16> LoadsToDemote;
+    SmallVector<Instruction *, 16> MultiStoreValuesToDemote;
 
     for (auto &I : BB) {
       if (auto *Load = dyn_cast<LoadInst>(&I)) {
@@ -263,6 +411,23 @@ void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
 
           if (NeedsDemotion) {
             LoadsToDemote.push_back(Load);
+          }
+        }
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        BasicBlock *StoreBB = Store->getParent();
+
+        Value *Val = Store->getValueOperand();
+        Instruction *ValInst = dyn_cast_or_null<Instruction>(Val);
+        if (not ValInst)
+          continue;
+
+        auto Uses = getRealUsesInBlock(ValInst, StoreBB);
+        if (Uses.size() > 1) {
+          MultiStoreValuesToDemote.push_back(ValInst);
+          errs() << "on doit mettre aussi " << *Val << " avec "
+                 << Val->getNumUses() << " uses.\n";
+          for (auto *U : Uses) {
+            errs().indent(4) << "Use: " << *U << "\n";
           }
         }
       }
@@ -297,17 +462,122 @@ void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
 
         NewLoad->insertAfter(CurrentUserInst->getPrevNode());
 
-        unsigned IndexUse = 0;
-        for (auto &Op : CurrentUserInst->operands()) {
-          if (Op == Load)
-            break;
-          IndexUse++;
+        CurrentUser->replaceUsesOfWith(Load, NewLoad);
+      }
+    }
+
+    SmallVector<Instruction *, 8> SeenMultiStoreValues;
+    for (Instruction *Inst : MultiStoreValuesToDemote) {
+      if (std::find(SeenMultiStoreValues.begin(), SeenMultiStoreValues.end(),
+                    Inst) != SeenMultiStoreValues.end()) {
+        errs() << "Already demoted value: " << *Inst << "\n";
+        continue;
+      }
+      errs() << "Demoting value with multiple stores: " << *Inst << " with "
+             << getRealUsesInBlock(Inst, Inst->getParent()).size()
+             << " uses.\n";
+
+      auto Uses = getRealUsesInBlock(Inst, Inst->getParent());
+
+      std::sort(Uses.begin(), Uses.end(), [](Instruction *A, Instruction *B) {
+        return A->comesBefore(B);
+      });
+
+      for (auto &U : Uses) {
+        errs() << "Use: " << *U << "\n";
+      }
+
+      StoreInst *FirstStore = dyn_cast<StoreInst>(Uses[0]);
+      auto *Ptr = FirstStore->getPointerOperand();
+      for (size_t I = 1; I < Uses.size(); ++I) {
+        auto *CurrentStore = dyn_cast<StoreInst>(Uses[I]);
+
+        IRBuilder<> Builder(CurrentStore);
+        auto *NewLoad =
+            Builder.CreateLoad(CurrentStore->getValueOperand()->getType(), Ptr,
+                               Inst->getName() + ".reload_bite");
+
+        CurrentStore->setOperand(0, NewLoad);
+      }
+      SeenMultiStoreValues.push_back(Inst);
+    }
+    errs() << "\n\n";
+  }
+}
+
+bool sinkInstructionToFirstUse(LoadInst *Inst, AAResults &AA) {
+  if (!Inst || Inst->use_empty())
+    return false;
+
+  if (Inst->mayHaveSideEffects()) {
+    return false;
+  }
+
+  BasicBlock *BB = Inst->getParent();
+
+  Instruction *TargetPosition = BB->getTerminator();
+
+  BasicBlock::iterator It(Inst);
+  ++It;
+
+  for (; It != BB->end(); ++It) {
+    Instruction *Curr = &*It;
+
+    bool IsUser = false;
+    for (Value *Op : Curr->operands()) {
+      if (Op == Inst) {
+        IsUser = true;
+        break;
+      }
+    }
+
+    if (IsUser) {
+      TargetPosition = Curr;
+      break;
+    }
+
+    if (Curr->mayWriteToMemory()) {
+      MemoryLocation LoadLoc = MemoryLocation::get(Inst);
+
+      if (auto *Store = dyn_cast<StoreInst>(Curr)) {
+        MemoryLocation StoreLoc = MemoryLocation::get(Store);
+        if (AA.alias(LoadLoc, StoreLoc) != AliasResult::NoAlias) {
+          errs() << "Blocked by Store alias: " << *Store << "\n";
+          TargetPosition = Curr; // On s'arrête juste devant ce mur
+          break;
         }
-        CurrentUser->setOperand(IndexUse, NewLoad);
+      } else if (Curr->mayReadOrWriteMemory()) {
+        if (isModSet(AA.getModRefInfo(Curr, LoadLoc))) {
+          errs() << "Blocked by ModRef (Call/Fence): " << *Curr << "\n";
+          TargetPosition = Curr;
+          break;
+        }
+      }
+    }
+  }
+
+  if (Inst->getNextNode() != TargetPosition) {
+    errs() << "Moving Load: " << *Inst << " \n     before: " << *TargetPosition
+           << "\n";
+    Inst->moveBefore(TargetPosition->getIterator());
+    return true;
+  }
+
+  return false;
+}
+
+void sinkInstructionsToFirstUse(Function &F, AAResults &AA, LoopInfo &LI) {
+  for (auto &BB : F) {
+    if (not LI.getLoopFor(&BB))
+      continue;
+    for (auto &I : BB) {
+      if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        sinkInstructionToFirstUse(Load, AA);
       }
     }
   }
 }
+
 } // namespace
 
 PreservedAnalyses ArrayReg2MemPass::run(Function &F,
@@ -324,6 +594,10 @@ PreservedAnalyses ArrayReg2MemPass::run(Function &F,
   demoteNonIndexPhis(F, LI, SE, DT);
 
   demoteUsesOfArrays(F, LI, SE, DT);
+
+  auto &AA = AM.getResult<AAManager>(F);
+
+  sinkInstructionsToFirstUse(F, AA, LI);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
