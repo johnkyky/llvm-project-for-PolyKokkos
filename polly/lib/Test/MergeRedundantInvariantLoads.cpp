@@ -11,6 +11,7 @@
 
 #include "polly/Test/MergeRedundantInvariantLoads.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -179,6 +180,16 @@ struct SCEVNonZeroValidator : public SCEVVisitor<SCEVNonZeroValidator, bool> {
   }
 
   bool visitUnknown(const SCEVUnknown *U) {
+    if (auto *I = dyn_cast<Instruction>(U->getValue())) {
+      for (auto *U : I->users()) {
+        for (auto *UserOfU : U->users()) {
+          if (auto *Assume = dyn_cast<AssumeInst>(UserOfU)) {
+            if (Assume->hasMetadata("array_size_positive"))
+              return true;
+          }
+        }
+      }
+    }
     return SE.isKnownPredicateAt(ICmpInst::ICMP_NE, U, SE.getZero(U->getType()),
                                  Context);
   }
@@ -265,6 +276,7 @@ bool arePointersDistinct(Value *P1, Value *P2, ScalarEvolution &SE,
     return false;
   }
 
+  errs().indent(20) << "SCEV context: " << *Context << "\n";
   SCEVNonZeroValidator Validator(SE, Context);
   if (Validator.visit(Delta)) {
     errs().indent(20) << "Delta is known non-zero by SCEVNonZeroValidator.\n";
@@ -286,17 +298,14 @@ bool arePointersEquivalent(Value *P1, Value *P2) {
 }
 
 void runOnDomNode(DomTreeNode *Node, AvailableLoadTracker &Tracker,
-                  ScalarEvolution &SE) {
+                  ScalarEvolution &SE, AAResults &AA) {
   BasicBlock *BB = Node->getBlock();
-
   size_t SavePoint = Tracker.save();
 
   for (Instruction &I : llvm::make_early_inc_range(*BB)) {
     if (auto *CurrentLoad = dyn_cast<LoadInst>(&I)) {
-      errs().indent(2) << "Examining Load: " << *CurrentLoad << "\n";
+      errs() << "Examining Load: " << *CurrentLoad << "\n";
       if (!CurrentLoad->isSimple()) {
-        errs().indent(4)
-            << "  Non-simple load, invalidating all tracked loads.\n";
         Tracker.invalidateAll();
         continue;
       }
@@ -312,6 +321,8 @@ void runOnDomNode(DomTreeNode *Node, AvailableLoadTracker &Tracker,
         for (auto &KV : Tracker.Table) {
           if (arePointersEquivalent(KV.first, Ptr) &&
               KV.second->getType() == CurrentLoad->getType()) {
+            errs() << "  Found approximately equivalent pointer: " << *KV.first
+                   << ", considering load: " << *KV.second << "\n";
             Replacement = KV.second;
             break;
           }
@@ -324,69 +335,87 @@ void runOnDomNode(DomTreeNode *Node, AvailableLoadTracker &Tracker,
         CurrentLoad->replaceAllUsesWith(Replacement);
         CurrentLoad->eraseFromParent();
       } else {
+        errs().indent(4) << "  No replacement found, adding to tracker.\n";
         Tracker.add(CurrentLoad);
       }
       continue;
     }
 
     if (auto *Store = dyn_cast<StoreInst>(&I)) {
-      errs().indent(2) << "\n\nExamining Store: " << *Store << "\n";
-      Value *StorePtr = Store->getPointerOperand();
+      errs() << "\n\nExamining Store: " << *Store << "\n";
+      MemoryLocation StoreLoc = MemoryLocation::get(Store);
 
       SmallVector<Value *, 4> PtrsToInvalidate;
 
-      for (auto &[LoadAdrr, Load] : Tracker.Table) {
-        errs() << "  Checking against tracked load pointer: " << *Load << "   "
-               << *LoadAdrr << "\n";
+      for (auto &[LoadPtr, TrackedLoad] : Tracker.Table) {
+        MemoryLocation LoadLoc = MemoryLocation::get(TrackedLoad);
+        errs() << " Checking against tracked load: " << *TrackedLoad << "\n";
+        LoadLoc.print(errs());
 
-        if (arePointersDistinct(StorePtr, LoadAdrr, SE, Store)) {
-          errs().indent(4) << "-> " << *Load << "\n";
+        if (AA.isNoAlias(StoreLoc, LoadLoc)) {
+          errs()
+              << "          AA: NoAlias, pointers are distinct. Keeping load: "
+              << *TrackedLoad << "\n";
           continue;
         }
 
-        errs().indent(4)
-            << "  Pointers are NOT distinct, will invalidate load for pointer: "
-            << *Load << "\n";
-        PtrsToInvalidate.push_back(LoadAdrr);
+        if (arePointersDistinct(const_cast<Value *>(StoreLoc.Ptr),
+                                const_cast<Value *>(LoadLoc.Ptr), SE, Store)) {
+          errs() << "          SCEV: Pointers are distinct. Keeping load: "
+                 << *TrackedLoad << "\n";
+          continue;
+        }
+
+        PtrsToInvalidate.push_back(LoadPtr);
       }
 
       for (Value *Ptr : PtrsToInvalidate) {
         Tracker.invalidate(Ptr);
       }
-      errs() << "\n\n";
-
       continue;
     }
 
     if (auto *Call = dyn_cast<CallInst>(&I)) {
       if (Function *Callee = Call->getCalledFunction()) {
         StringRef Name = Callee->getName();
-
         if (Name.starts_with("llvm.annotation") ||
-            Name.starts_with("llvm.assume")) {
+            Name.starts_with("llvm.assume") ||
+            Name.starts_with("llvm.lifetime")) {
           continue;
         }
       }
-      if (not Call->onlyReadsMemory() && not Call->doesNotAccessMemory()) {
-        errs() << "INVALIDATE ALL due to call: " << *Call << "\n";
-        Tracker.invalidateAll();
+
+      if (Call->doesNotAccessMemory() || Call->onlyReadsMemory()) {
+        continue;
+      }
+      errs() << "Examining Call: " << *Call << "\n";
+
+      SmallVector<Value *, 4> PtrsToInvalidate;
+      for (auto &[LoadPtr, TrackedLoad] : Tracker.Table) {
+        MemoryLocation LoadLoc = MemoryLocation::get(TrackedLoad);
+        if (isModSet(AA.getModRefInfo(Call, LoadLoc))) {
+          PtrsToInvalidate.push_back(LoadPtr);
+        }
+      }
+
+      for (Value *Ptr : PtrsToInvalidate) {
+        Tracker.invalidate(Ptr);
       }
     }
   }
 
   for (auto *Child : Node->children()) {
-    runOnDomNode(Child, Tracker, SE);
+    runOnDomNode(Child, Tracker, SE, AA);
   }
-
   Tracker.restore(SavePoint);
 }
 
-void globalLoadElimination(Function &F, DominatorTree &DT,
-                           ScalarEvolution &SE) {
+void globalLoadElimination(Function &F, DominatorTree &DT, ScalarEvolution &SE,
+                           AAResults &AA) {
   AvailableLoadTracker Tracker;
 
   if (DomTreeNode *Root = DT.getRootNode()) {
-    runOnDomNode(Root, Tracker, SE);
+    runOnDomNode(Root, Tracker, SE, AA);
   }
 }
 } // namespace
@@ -401,9 +430,10 @@ MergeRedundantInvariantLoadsPass::run(Function &F,
                     << F.getName() << "\n";);
 
   ScalarEvolution &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
-
+  AAResults &AA = AM.getResult<AAManager>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  globalLoadElimination(F, DT, SE);
+
+  globalLoadElimination(F, DT, SE, AA);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
