@@ -53,7 +53,6 @@
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
-#include "llvm/Transforms/Utils/Mem2Reg.h"
 
 #define DEBUG_TYPE "polly-pass"
 
@@ -364,19 +363,6 @@ public:
         Info.recompute();
       }
     }
-
-    auto PA = InstCombinePass().run(F, FAM);
-    FAM.invalidate(F, PA);
-    PA = SimplifyCFGPass().run(F, FAM);
-    FAM.invalidate(F, PA);
-
-    PA = PromotePass().run(F, FAM);
-    FAM.invalidate(F, PA);
-
-    PA = InstCombinePass().run(F, FAM);
-    FAM.invalidate(F, PA);
-    PA = SimplifyCFGPass().run(F, FAM);
-    FAM.invalidate(F, PA);
 
     return ModifiedIR;
   }
