@@ -10,9 +10,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "polly/Test/ArrayReg2Mem.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -22,8 +24,11 @@
 #include "llvm/IR/Value.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include <algorithm>
 
 #define DEBUG_TYPE "polly-array-reg2mem"
@@ -386,7 +391,7 @@ SmallVector<Instruction *, 2> getRealUsesInBlock(Instruction *Val,
 */
 void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
                         DominatorTree &DT) {
-  errs() << "Demoting uses of arrays\n";
+  errs() << "demoteUsesOfArrays running\n";
   for (auto &BB : F) {
     if (!LI.getLoopFor(&BB))
       continue;
@@ -501,8 +506,8 @@ void demoteUsesOfArrays(Function &F, LoopInfo &LI, ScalarEvolution &SE,
       }
       SeenMultiStoreValues.push_back(Inst);
     }
-    errs() << "\n\n";
   }
+  errs() << "demoteUsesOfArrays done\n";
 }
 
 bool sinkInstructionToFirstUse(LoadInst *Inst, AAResults &AA) {
@@ -543,12 +548,11 @@ bool sinkInstructionToFirstUse(LoadInst *Inst, AAResults &AA) {
         MemoryLocation StoreLoc = MemoryLocation::get(Store);
         if (AA.alias(LoadLoc, StoreLoc) != AliasResult::NoAlias) {
           errs() << "Blocked by Store alias: " << *Store << "\n";
-          TargetPosition = Curr; // On s'arrête juste devant ce mur
+          TargetPosition = Curr;
           break;
         }
       } else if (Curr->mayReadOrWriteMemory()) {
         if (isModSet(AA.getModRefInfo(Curr, LoadLoc))) {
-          errs() << "Blocked by ModRef (Call/Fence): " << *Curr << "\n";
           TargetPosition = Curr;
           break;
         }
@@ -557,8 +561,8 @@ bool sinkInstructionToFirstUse(LoadInst *Inst, AAResults &AA) {
   }
 
   if (Inst->getNextNode() != TargetPosition) {
-    errs() << "Moving Load: " << *Inst << " \n     before: " << *TargetPosition
-           << "\n";
+    errs().indent(4) << "Moving Load: " << *Inst << "\n"
+                     << indent(8) << "before: " << *TargetPosition << "\n";
     Inst->moveBefore(TargetPosition->getIterator());
     return true;
   }
@@ -567,6 +571,7 @@ bool sinkInstructionToFirstUse(LoadInst *Inst, AAResults &AA) {
 }
 
 void sinkInstructionsToFirstUse(Function &F, AAResults &AA, LoopInfo &LI) {
+  errs() << "sinkInstructionsToFirstUse running\n";
   for (auto &BB : F) {
     if (not LI.getLoopFor(&BB))
       continue;
@@ -576,6 +581,364 @@ void sinkInstructionsToFirstUse(Function &F, AAResults &AA, LoopInfo &LI) {
       }
     }
   }
+  errs() << "sinkInstructionsToFirstUse done\n";
+}
+
+/*
+ *     - entry ---------
+ *    | ...
+ *    | strore Val to ArrayAddress
+ *     -----------------
+ *               |
+ *              \|/
+ *     - body ----------
+ *    | phi = [Val, NewVal]
+ *  ->| ...
+ * |  | NewVal = fadd ....
+ * |  | strore NewVal to ArrayAddress
+ *  --| ...
+ *     -----------------
+ *               |
+ *              \|/
+ *     - end -----------
+ *    | ...
+ *    | foo = fadd NewVal + ....
+ *    | ...
+ *     -----------------
+ *
+ * to
+ *
+ *     - entry ---------
+ *    | ...
+ *    | strore Val to ArrayAddress
+ *     -----------------
+ *               |
+ *              \|/
+ *     - body ----------
+ *    | phi = [Val, NewVal]
+ *  ->| ...
+ * |  | NewVal = fadd ....
+ * |  | strore NewVal to ArrayAddress
+ *  --| ...
+ *     -----------------
+ *               |
+ *              \|/
+ *     - end -----------
+ *    | ...
+ *    | load NewValReloaded ArrayAddress
+ *    | foo = fadd NewValReloaded + ....
+ *    | ...
+ *     -----------------
+ */
+void demoteUsesOutsideScalarFromArrays(Function &F, LoopInfo &LI,
+                                       ScalarEvolution &SE, DominatorTree &DT) {
+  errs() << "demoteUsesOutsideScalarFromArrays runnning\n";
+
+  SmallVector<std::pair<Instruction *, Value *>, 8> ArrayWithOusideUses;
+  for (auto &BB : F) {
+    if (!LI.getLoopFor(&BB))
+      continue;
+    for (auto &I : BB) {
+      if (I.getType()->isPointerTy())
+        continue;
+
+      bool HaveArrayStore = false;
+      Value *AddressInst = nullptr;
+      for (auto *U : I.users()) {
+        Instruction *UserInst = dyn_cast<Instruction>(U);
+        if (UserInst->getParent() != &BB)
+          continue;
+        if (auto *Store = dyn_cast<StoreInst>(U)) {
+          if (HaveArrayStore) {
+            HaveArrayStore = false;
+            break;
+          }
+          AddressInst = Store->getPointerOperand();
+          HaveArrayStore = true;
+        }
+      }
+
+      if (not HaveArrayStore)
+        continue;
+
+      for (auto *U : I.users()) {
+        Instruction *UserInst = dyn_cast<Instruction>(U);
+
+        if (not UserInst)
+          continue;
+
+        if (UserInst->getParent() == &BB)
+          continue;
+
+        ArrayWithOusideUses.push_back(std::make_pair(&I, AddressInst));
+      }
+    }
+  }
+
+  //
+  for (auto &[Inst, AddressInst] : ArrayWithOusideUses) {
+    errs() << "Demoting uses of instruction: " << *Inst << " outside its block "
+           << Inst->getParent()->getName() << "\n";
+
+    for (auto *U : Inst->users()) {
+      Instruction *UserInst = dyn_cast<Instruction>(U);
+      if (not UserInst)
+        continue;
+      if (UserInst->getParent() == Inst->getParent())
+        continue;
+
+      if (isa<PHINode>(UserInst)) {
+        errs().indent(4) << "Skipping non-PHI user: " << *UserInst << "\n";
+        continue;
+      }
+
+      IRBuilder<> Builder(UserInst->getParent(),
+                          UserInst->getParent()->getFirstInsertionPt());
+      auto *NewLoad = Builder.CreateLoad(Inst->getType(), AddressInst,
+                                         Inst->getName() + ".reload_outside");
+      UserInst->replaceUsesOfWith(Inst, NewLoad);
+
+      errs().indent(4) << "Inserted Load: " << *NewLoad << " to replace use in "
+                       << *UserInst << "\n";
+    }
+  }
+  errs() << "demoteUsesOutsideScalarFromArrays done\n";
+}
+
+/*
+ *     - entry ---------
+ *    | ...
+ *    | Val = A[i][0]
+ *     -----------------
+ *               |
+ *              \|/
+ *     - body ----------
+ *    | j = [1, j+1]
+ *  ->| phi = [Val, NewVal]
+ * |  | ...
+ * |  | NewVal = fadd ....
+ * |  | strore NewVal to A[i][j]
+ *  --| ...
+ *     -----------------
+ *               |
+ *              \|/
+ *     - end -----------
+ *    | ...
+ *     -----------------
+ *
+ * to
+ *
+ *     - entry ---------
+ *    | ...
+ *     -----------------
+ *               |
+ *              \|/
+ *     - body ----------
+ *    | j = [1, j+1]
+ *  ->| load ValReloaded A[i][j-1]
+ * |  | ...
+ * |  | NewVal = fadd ....
+ * |  | strore NewVal to A[i][j]
+ *  --| ...
+ *     -----------------
+ *               |
+ *              \|/
+ *     - end -----------
+ *    | ...
+ *     -----------------
+ */
+void demotePHIDependence(Function &F, LoopInfo &LI, ScalarEvolution &SE,
+                         DominatorTree &DT) {
+  struct UseInfo {
+    Instruction *Inst;
+    Value *AddressInst;
+    PHINode *Phi;
+  };
+
+  errs() << "demotePHIDependence running\n";
+  SmallVector<UseInfo, 8> InstsToDemote;
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      if (I.getType()->isPointerTy() or I.getType()->isIntegerTy())
+        continue;
+
+      // I need to be stored and used in phi inside the I block
+
+      bool HaveStore = false;
+      Value *AddressInst = nullptr;
+      bool HavePhiUse = false;
+      PHINode *PhiInst = nullptr;
+      for (auto *U : I.users()) {
+        Instruction *UserInst = dyn_cast<Instruction>(U);
+        if (not UserInst)
+          continue;
+
+        if (UserInst->getParent() != &BB)
+          continue;
+
+        if (auto *Store = dyn_cast<StoreInst>(U)) {
+          if (HaveStore) {
+            HaveStore = false;
+            break;
+          }
+          HaveStore = true;
+          AddressInst = Store->getPointerOperand();
+        } else if (auto *Phi = dyn_cast<PHINode>(U)) {
+          // PHI node musn't have constant incoming value
+          if (llvm::any_of(Phi->incoming_values(),
+                           [](Value *V) { return isa<Constant>(V); })) {
+            errs().indent(4) << "Skipping PHI user because AT LEAST ONE "
+                                "operand is constant: "
+                             << *UserInst << "\n";
+            continue;
+          }
+          HavePhiUse = true;
+          PhiInst = Phi;
+        }
+      }
+
+      if (HaveStore and HavePhiUse) {
+        InstsToDemote.push_back({&I, AddressInst, PhiInst});
+      }
+    }
+  }
+
+  errs() << "Found " << InstsToDemote.size() << " instructions\n";
+  for (auto &[Inst, Address, Phi] : InstsToDemote) {
+    errs().indent(2) << "Instruction to demote: " << *Inst << "\n";
+  }
+  errs() << "\n\n";
+
+  for (auto &[Inst, Address, Phi] : InstsToDemote) {
+    bool EarlyBreak = false;
+
+    Value *BaseStore = llvm::getUnderlyingObject(Address);
+    for (auto &Op : Phi->incoming_values()) {
+      auto *UserInst = dyn_cast<Instruction>(Op);
+      errs().indent(4) << "Checking PHI operand: " << *Op << "\n";
+      if (UserInst == Inst) {
+        continue;
+      }
+      if (auto *Load = dyn_cast<LoadInst>(Op)) {
+        errs().indent(6) << "Operand is a Load: " << *Load << "\n";
+
+        // Récupération de l'objet de base de l'adresse du Load
+        Value *BaseLoad = llvm::getUnderlyingObject(Load->getPointerOperand());
+
+        // Comparaison des adresses de base via ValueTracking
+        if (BaseLoad != BaseStore) {
+          errs().indent(8) << "Load operand underlying object does not match "
+                           << "Store underlying object!\n";
+          errs().indent(10) << "Load Base: " << *BaseLoad << "\n";
+          errs().indent(10) << "Store Base: " << *BaseStore << "\n";
+          EarlyBreak = true;
+        } else {
+          errs().indent(8) << "Match found via Underlying Object!\n";
+        }
+      }
+    }
+
+    if (EarlyBreak) {
+      errs().indent(4)
+          << "Skipping instruction because of incompatible PHI uses: " << *Inst
+          << "\n";
+      continue;
+    }
+
+    // 1. On récupère la formule SCEV de l'adresse d'écriture (A[i][j])
+    const SCEV *StoreAddrSCEV = SE.getSCEV(Address);
+
+    // 2. On vérifie que c'est bien une induction de boucle (affine)
+    auto *AddRec = dyn_cast<SCEVAddRecExpr>(StoreAddrSCEV);
+    if (AddRec) {
+      errs() << "Address SCEV is an AddRec: " << *AddRec << "\n";
+    }
+    errs() << "Vrai val "
+           << (AddRec->getLoop() != LI.getLoopFor(Inst->getParent())) << "\n";
+    if (!AddRec || AddRec->getLoop() != LI.getLoopFor(Inst->getParent())) {
+      errs().indent(4)
+          << "Skipped: Address is not a simple affine loop induction.\n";
+      continue;
+    }
+
+    // 3. On calcule l'adresse précédente (A[i][j-1])
+    const SCEV *Step = AddRec->getStepRecurrence(SE);
+    const SCEV *PrevAddrSCEV = SE.getMinusSCEV(StoreAddrSCEV, Step);
+
+    errs() << "Store Address SCEV: " << *StoreAddrSCEV << "\n";
+
+    // 4. VERIFICATION CRUCIALE DE LA PREMIÈRE ITÉRATION
+    bool SafeToDemote = false;
+    const Loop *L = AddRec->getLoop();
+    BasicBlock *Preheader = L->getLoopPreheader();
+
+    int PreheaderIdx = Phi->getBasicBlockIndex(Preheader);
+    if (PreheaderIdx >= 0) {
+      Value *InitVal = Phi->getIncomingValue(PreheaderIdx);
+
+      if (auto *InitLoad = dyn_cast<LoadInst>(InitVal)) {
+        // La formule de l'adresse du Load avant la boucle
+        const SCEV *InitLoadAddrSCEV =
+            SE.getSCEV(InitLoad->getPointerOperand());
+
+        // Le AddRec contient {Start, +, Step}.
+        // L'adresse du Store à la TOUTE PREMIÈRE itération est "Start".
+        const SCEV *StoreStartSCEV = AddRec->getStart();
+
+        // Donc A[i][j-1] à la première itération c'est mathématiquement "Start
+        // - Step"
+        const SCEV *FirstIterPrevAddrSCEV =
+            SE.getMinusSCEV(StoreStartSCEV, Step);
+
+        errs().indent(6) << "--- SCEV Analysis ---\n";
+        errs().indent(8) << "Init Load Addr: " << *InitLoadAddrSCEV << "\n";
+        errs().indent(8) << "Loop First Iter Prev Addr: "
+                         << *FirstIterPrevAddrSCEV << "\n";
+        errs().indent(8) << "Store Addr Start: " << *StoreStartSCEV << "\n";
+        errs().indent(8) << "Step: " << *Step << "\n";
+        errs().indent(6) << "---------------------\n";
+
+        if (InitLoadAddrSCEV == FirstIterPrevAddrSCEV) {
+          SafeToDemote = true;
+        } else {
+          // LLVM SCEV peut parfois avoir du mal à simplifier.
+          // On teste si la différence entre les deux est mathématiquement ZÉRO
+          const SCEV *Diff =
+              SE.getMinusSCEV(InitLoadAddrSCEV, FirstIterPrevAddrSCEV);
+          if (Diff->isZero()) {
+            errs().indent(8) << "Matched via Zero Difference!\n";
+            SafeToDemote = true;
+          }
+        }
+      }
+    }
+
+    if (!SafeToDemote) {
+      errs().indent(4) << "Skipped: The PHI initial value does not match the "
+                          "memory at A[i][j-1].\n";
+      continue;
+    }
+
+    BasicBlock::iterator InsertPtIt = Inst->getParent()->getFirstNonPHIIt();
+
+    Instruction *InsertPt = &*InsertPtIt;
+
+    SCEVExpander Expander(SE, "addr_expander", false);
+
+    Value *PrevAddr =
+        Expander.expandCodeFor(PrevAddrSCEV, Address->getType(), InsertPt);
+
+    IRBuilder<> Builder(Inst->getParent(), InsertPtIt);
+    auto *NewLoad = Builder.CreateLoad(Inst->getType(), PrevAddr,
+                                       Inst->getName() + ".reload_prev");
+    Phi->replaceAllUsesWith(NewLoad);
+    Phi->eraseFromParent();
+
+    errs() << "Successfully demoted PHI to memory read at: " << *PrevAddr
+           << "\n";
+  }
+
+  errs() << "demotePHIDependence done\n";
 }
 
 } // namespace
@@ -591,7 +954,11 @@ PreservedAnalyses ArrayReg2MemPass::run(Function &F,
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
-  demoteNonIndexPhis(F, LI, SE, DT);
+  // demoteNonIndexPhis(F, LI, SE, DT);
+
+  demoteUsesOutsideScalarFromArrays(F, LI, SE, DT);
+
+  demotePHIDependence(F, LI, SE, DT);
 
   demoteUsesOfArrays(F, LI, SE, DT);
 
