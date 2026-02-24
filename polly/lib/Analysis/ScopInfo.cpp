@@ -368,7 +368,12 @@ void ScopArrayInfo::print(raw_ostream &OS, bool SizeAsPwAff) const {
   if (BasePtrOriginSAI)
     OS << " [BasePtrOrigin: " << BasePtrOriginSAI->getName() << "]";
 
-  OS << " // Element size " << getElemSizeInBytes() << "\n";
+  OS << " // Element size " << getElemSizeInBytes() << " ";
+  if (getBasePtr()) {
+    getBasePtr()->printAsOperand(OS);
+    OS << "\n";
+  } else
+    OS << " (unknown base pointer)\n";
 }
 
 const ScopArrayInfo *
