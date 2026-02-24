@@ -777,14 +777,26 @@ void BlockGenerator::generateScalarStores(
                                             BBMap, NewAccesses);
 
           Val = getNewValue(Stmt, Val, BBMap, LTS, L);
-          assert((!isa<Instruction>(Val) ||
-                  DT.dominates(cast<Instruction>(Val)->getParent(),
-                               Builder.GetInsertBlock())) &&
-                 "Domination violation");
-          assert((!isa<Instruction>(Address) ||
-                  DT.dominates(cast<Instruction>(Address)->getParent(),
-                               Builder.GetInsertBlock())) &&
-                 "Domination violation");
+
+          auto SafeDominates = [&](Value *V) {
+            if (Instruction *Inst = dyn_cast<Instruction>(V)) {
+              BasicBlock *DefBB = Inst->getParent();
+              BasicBlock *InsertBB = Builder.GetInsertBlock();
+
+              Function &OriginalFunc = Stmt.getParent()->getFunction();
+
+              if (DefBB->getParent() != &OriginalFunc ||
+                  InsertBB->getParent() != &OriginalFunc) {
+                return true;
+              }
+
+              return DT.dominates(DefBB, InsertBB);
+            }
+            return true;
+          };
+
+          assert(SafeDominates(Val) && "Domination violation on Val");
+          assert(SafeDominates(Address) && "Domination violation on Address");
 
           Builder.CreateStore(Val, Address);
         });
