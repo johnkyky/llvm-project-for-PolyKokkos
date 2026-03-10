@@ -136,6 +136,8 @@ target_link_libraries(Polly PUBLIC
   ${ISL_TARGET} osl
 )
 
+target_link_libraries(Polly PUBLIC PollyPPCG)
+
 # Create a loadable module Polly.so that can be loaded using
 # LLVM's/clang's "-load" option.
 if (WIN32 OR CYGWIN OR NOT LLVM_ENABLE_PIC)

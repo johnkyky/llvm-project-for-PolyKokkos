@@ -315,3 +315,57 @@ if (POLLY_BUNDLED_ISL)
   target_compile_options(PollyISL PRIVATE ${DISABLE_WARNING_FLAGS})
   target_compile_options(polly-isl-test PRIVATE ${DISABLE_WARNING_FLAGS})
 endif (POLLY_BUNDLED_ISL)
+
+
+include(FetchContent)
+
+FetchContent_Declare(
+  ppcg
+  GIT_REPOSITORY https://github.com/johnkyky/PSAcc.git
+  GIT_TAG        master
+  SOURCE_DIR     ${CMAKE_CURRENT_BINARY_DIR}/ppcg_includes/ppcg
+)
+
+FetchContent_MakeAvailable(ppcg)
+
+get_target_property(PPCG_FILES ppcg SOURCES)
+
+set(PPCG_ABSOLUTE_FILES "")
+foreach(file IN LISTS PPCG_FILES)
+    if(NOT IS_ABSOLUTE "${file}")
+        list(APPEND PPCG_ABSOLUTE_FILES "${ppcg_SOURCE_DIR}/${file}")
+    else()
+        list(APPEND PPCG_ABSOLUTE_FILES "${file}")
+    endif()
+endforeach()
+
+
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${ppcg_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+    WORKING_DIRECTORY "${ppcg_SOURCE_DIR}"
+    OUTPUT_VARIABLE PPCG_GIT_HEAD_ID
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+else()
+  set(PPCG_GIT_HEAD_ID "UNKNOWN")
+endif()
+message(STATUS "PSAcc/PPCG version: ${PPCG_GIT_HEAD_ID}")
+
+
+include_directories(BEFORE
+  ${CMAKE_CURRENT_BINARY_DIR}/ppcg_includes
+  ${ppcg_SOURCE_DIR}
+)
+
+add_polly_library(PollyPPCG
+  ${PPCG_ABSOLUTE_FILES}
+)
+
+target_include_directories(PollyPPCG PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/ppcg_includes>
+  $<BUILD_INTERFACE:${ppcg_SOURCE_DIR}>
+)
+
+target_link_libraries(PollyPPCG PUBLIC ${ISL_TARGET})
