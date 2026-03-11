@@ -58,6 +58,7 @@ add_llvm_pass_plugin(Polly
   CodeGen/IRBuilder.cpp
   CodeGen/Utils.cpp
   CodeGen/RuntimeDebugBuilder.cpp
+  CodeGen/PPCGCodeGeneration.cpp
   CodeGen/PerfMonitor.cpp
   Exchange/JSONExporter.cpp
   Pass/PhaseManager.cpp
