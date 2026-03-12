@@ -2408,7 +2408,7 @@ std::string GPUNodeBuilder::createKernelASM() {
   }
 
   std::unique_ptr<TargetMachine> TargetM(GPUTarget->createTargetMachine(
-      GPUTriple, Subtarget, "", Options, std::optional<Reloc::Model>()));
+      GPUTriple, Subtarget, "", Options, std::nullopt));
 
   SmallString<0> ASMString;
   raw_svector_ostream ASMStream(ASMString);
@@ -2824,10 +2824,9 @@ public:
     PPCGScop->names = getNames();
     PPCGScop->pet = nullptr;
 
-    // TODO: doesn't exist in newer ppcg version
-    // compute_tagger(PPCGScop);
-    // compute_dependences(PPCGScop);
-    // eliminate_dead_code(PPCGScop);
+    compute_tagger(PPCGScop);
+    compute_dependences(PPCGScop);
+    eliminate_dead_code(PPCGScop);
 
     return PPCGScop;
   }
