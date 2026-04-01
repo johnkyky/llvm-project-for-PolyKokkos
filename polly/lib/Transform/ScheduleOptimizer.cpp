@@ -709,6 +709,23 @@ static void walkScheduleTreeForStatistics(isl::schedule Schedule, int Version) {
       &Version);
 }
 
+// Projects wrapped memory dependencies (StmtA -> [StmtB -> MemRef])
+// down to pure statement dependencies(StmtA->StmtB)
+isl::union_map projectWrappedToStatement(isl::union_map UMap) {
+  isl::union_map Result = isl::union_map::empty(UMap.ctx());
+  UMap.foreach_map([&Result](isl::map Map) {
+    if (Map.range().is_wrapping()) {
+      // Extrait la destination B de la relation enveloppée [B -> MemRef]
+      Result = Result.unite(isl::union_map(Map.range_factor_domain()));
+    } else {
+      // Conserve les relations normales Stmt -> Stmt
+      Result = Result.unite(isl::union_map(Map));
+    }
+    return isl::stat::ok();
+  });
+  return Result;
+}
+
 static void runIslScheduleOptimizerImpl(
     Scop &S,
     function_ref<const Dependences &(Dependences::AnalysisLevel)> GetDeps,
@@ -805,6 +822,9 @@ static void runIslScheduleOptimizerImpl(
 
     isl::union_map Validity = D.getDependences(ValidityKinds);
     isl::union_map Proximity = D.getDependences(ProximityKinds);
+
+    Validity = projectWrappedToStatement(Validity);
+    Proximity = projectWrappedToStatement(Proximity);
 
     // Simplify the dependences by removing the constraints introduced by the
     // domains. This can speed up the scheduling time significantly, as large
