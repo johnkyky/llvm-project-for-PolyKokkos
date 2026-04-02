@@ -791,6 +791,7 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName,
 
   isl_ctx *Ctx = S.getIslCtx().get();
 
+  int StmtIndex = 0;
   isl::union_map USchedule = isl::union_map::empty(Ctx);
   for (osl_statement_p OSLStmt = OSLScop->statement,
                        OldOSLStmt = OldOSLScop->statement;
@@ -823,6 +824,19 @@ void OpenSCoPImportPass::importOpenScop(Scop &S, std::string FileName,
 
     // Statement schedule
     isl::map NewSchedule = PlutoScattering.intersect_domain(Stmt.getDomain());
+
+    // useful to order statements in the same order as in the openscop when
+    // they have the same scattering
+    {
+      unsigned OutDims = unsignedFromIslSize(NewSchedule.dim(isl::dim::out));
+      NewSchedule = NewSchedule.add_dims(isl::dim::out, 1);
+      isl::local_space LSpace(NewSchedule.get_space());
+      isl::constraint Eq = isl::constraint::alloc_equality(LSpace);
+      Eq = Eq.set_coefficient_si(isl::dim::out, OutDims, 1);
+      Eq = Eq.set_constant_si(-StmtIndex);
+      NewSchedule = NewSchedule.add_constraint(Eq);
+      StmtIndex++;
+    }
 
     isl::union_map UMap = isl::union_map(NewSchedule);
 
