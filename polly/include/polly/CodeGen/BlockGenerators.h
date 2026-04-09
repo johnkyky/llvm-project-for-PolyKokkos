@@ -170,6 +170,11 @@ protected:
   /// @}
 
 public:
+  void updateGenDT(DominatorTree *NewDT) { GenDT = NewDT; }
+  void updateGenLI(LoopInfo *NewLI) { GenLI = NewLI; }
+  void updateGenSE(ScalarEvolution *NewSE) { GenSE = NewSE; }
+
+public:
   /// Map to resolve scalar dependences for PHI operands and scalars.
   ///
   /// When translating code that contains scalar dependences as they result from
