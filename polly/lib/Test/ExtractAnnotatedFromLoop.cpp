@@ -381,7 +381,7 @@ bool readBackend(Function &F) {
         return 0;
       if (B == "OpenMP")
         return 1;
-      if (B == "CUDA")
+      if (B == "Cuda")
         return 2;
       llvm_unreachable("Unknown backend annotation");
     };

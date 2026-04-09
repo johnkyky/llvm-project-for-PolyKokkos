@@ -2068,7 +2068,7 @@ public:
     case OpenMP:
       return "OpenMP";
     case CUDA:
-      return "CUDA";
+      return "Cuda";
     case Undefined:
       return "Undefined";
     }
@@ -2081,7 +2081,7 @@ public:
       Backend = Serial;
     } else if (B == "OpenMP") {
       Backend = OpenMP;
-    } else if (B == "CUDA") {
+    } else if (B == "Cuda") {
       Backend = CUDA;
     } else {
       Backend = Undefined;
