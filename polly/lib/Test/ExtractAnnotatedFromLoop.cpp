@@ -375,26 +375,30 @@ void extractVarAnnotations(Function &F) {
 
 bool readBackend(Function &F) {
   // Backend priority : Serial < OpenMP < CUDA
-  auto AddBackendAttr = [](Function &F, std::string Backend) {
-    if (Backend != "Serial" && Backend != "OpenMP" && Backend != "CUDA")
+  auto AddBackendAttr = [](Function &F, StringRef Backend) {
+    auto GetPriority = [](StringRef B) -> int {
+      if (B == "Serial")
+        return 0;
+      if (B == "OpenMP")
+        return 1;
+      if (B == "CUDA")
+        return 2;
       llvm_unreachable("Unknown backend annotation");
+    };
 
-    if (not F.hasFnAttribute("polly.backend")) {
+    int NewPriority = GetPriority(Backend);
+
+    if (!F.hasFnAttribute("polly.backend")) {
       F.addFnAttr("polly.backend", Backend);
       return;
     }
 
-    if (Backend == "CUDA")
-      return;
+    StringRef CurrentBackend =
+        F.getFnAttribute("polly.backend").getValueAsString();
+    int CurrentPriority = GetPriority(CurrentBackend);
 
-    Attribute Attr = F.getFnAttribute("polly.backend");
-    StringRef CurrentBackend = Attr.getValueAsString();
-    if ((CurrentBackend == "Serial" and
-         (Backend == "OpenMP" or Backend == "CUDA")) or
-        (CurrentBackend == "OpenMP" and Backend == "OpenMP")) {
+    if (NewPriority > CurrentPriority)
       F.addFnAttr("polly.backend", Backend);
-      return;
-    }
   };
 
   bool Changed = false;

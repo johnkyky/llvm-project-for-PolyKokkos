@@ -61,6 +61,21 @@ using namespace llvm;
 
 namespace {
 
+enum class Backend { CPU, GPU };
+Backend readBackend(const Function &F) {
+  if (F.hasFnAttribute("polly.backend")) {
+    auto BackendAttr = F.getFnAttribute("polly.backend");
+    std::string BackendStr = BackendAttr.getValueAsString().str();
+    if (BackendStr == "Serial")
+      return Backend::CPU;
+    if (BackendStr == "OpenMP")
+      return Backend::CPU;
+    if (BackendStr == "Cuda")
+      return Backend::GPU;
+  }
+  return Backend::CPU;
+}
+
 /// Recurse through all subregions and all regions and add them to RQ.
 static void addRegionIntoQueue(Region &R, SmallVector<Region *> &RQ) {
   RQ.push_back(&R);
