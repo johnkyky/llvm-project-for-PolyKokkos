@@ -24,6 +24,8 @@
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/SCEVValidator.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsNVPTX.h"
@@ -136,6 +138,37 @@ static cl::opt<GPUArch, true>
                    cl::init(GPUArch::NVPTX64), cl::cat(PollyCategory));
 
 extern bool polly::PerfMonitoring;
+
+namespace {
+void dumpIslAstNode(__isl_keep isl_ast_node *Node) {
+  if (!Node) {
+    llvm::errs() << "=== AST Node is NULL ===\n";
+    return;
+  }
+
+  // 1. Récupérer le contexte ISL directement depuis le nœud
+  isl_ctx *Ctx = isl_ast_node_get_ctx(Node);
+
+  // 2. Créer un printer qui écrit dans une chaîne de caractères
+  isl_printer *P = isl_printer_to_str(Ctx);
+
+  // 3. LA LIGNE MAGIQUE : Forcer l'affichage sous forme de pseudo-code C
+  P = isl_printer_set_output_format(P, ISL_FORMAT_C);
+
+  // 4. Imprimer le nœud dans le printer
+  P = isl_printer_print_ast_node(P, Node);
+
+  // 5. Récupérer la chaîne finale et l'afficher via LLVM
+  char *Str = isl_printer_get_str(P);
+  llvm::errs() << "\n--- AST Node Dump ---\n";
+  llvm::errs() << (Str ? Str : "(Error generating AST string)") << "\n";
+  llvm::errs() << "---------------------\n";
+
+  // 6. Nettoyage de la mémoire (règle stricte du C)
+  free(Str);
+  isl_printer_free(P);
+}
+} // namespace
 
 /// Return  a unique name for a Scop, which is the scop region with the
 /// function name.
@@ -633,21 +666,6 @@ private:
   ///
   /// @returns A string containing the corresponding PTX assembly code.
   std::string createKernelASM();
-
-  /// Remove references from the dominator tree to the kernel function @p F.
-  ///
-  /// @param F The function to remove references to.
-  void clearDominators(Function *F);
-
-  /// Remove references from scalar evolution to the kernel function @p F.
-  ///
-  /// @param F The function to remove references to.
-  void clearScalarEvolution(Function *F);
-
-  /// Remove references from loop info to the kernel function @p F.
-  ///
-  /// @param F The function to remove references to.
-  void clearLoops(Function *F);
 
   /// Check if the scop requires to be linked with CUDA's libdevice.
   bool requiresCUDALibDevice();
@@ -1249,10 +1267,10 @@ void GPUNodeBuilder::createUser(__isl_take isl_ast_node *UserStmt) {
   isl_ast_expr *Expr = isl_ast_node_user_get_expr(UserStmt);
   isl_ast_expr *StmtExpr = isl_ast_expr_get_op_arg(Expr, 0);
   isl_id *Id = isl_ast_expr_get_id(StmtExpr);
-  isl_id_free(Id);
   isl_ast_expr_free(StmtExpr);
 
   const char *Str = isl_id_get_name(Id);
+  isl_id_free(Id);
   if (!strcmp(Str, "kernel")) {
     createKernel(UserStmt);
     if (PollyManagedMemory)
@@ -1463,7 +1481,8 @@ static bool isValidFunctionInKernel(llvm::Function *F, bool AllowLibDevice) {
 
   return F->isIntrinsic() &&
          (Name.starts_with("llvm.sqrt") || Name.starts_with("llvm.fabs") ||
-          Name.starts_with("llvm.copysign"));
+          Name.starts_with("llvm.copysign") or
+          Name.starts_with("llvm.annotation"));
 }
 
 /// Do not take `Function` as a subtree value.
@@ -1570,35 +1589,6 @@ GPUNodeBuilder::getReferencesInKernel(ppcg_kernel *Kernel) {
   }
   return std::make_tuple(ReplacedValues, ValidSubtreeFunctions, Loops,
                          ParamSpace);
-}
-
-void GPUNodeBuilder::clearDominators(Function *F) {
-  DomTreeNode *N = DT.getNode(&F->getEntryBlock());
-  std::vector<BasicBlock *> Nodes;
-  for (po_iterator<DomTreeNode *> I = po_begin(N), E = po_end(N); I != E; ++I)
-    Nodes.push_back(I->getBlock());
-
-  for (BasicBlock *BB : Nodes)
-    DT.eraseNode(BB);
-}
-
-void GPUNodeBuilder::clearScalarEvolution(Function *F) {
-  for (BasicBlock &BB : *F) {
-    Loop *L = LI.getLoopFor(&BB);
-    if (L)
-      SE.forgetLoop(L);
-  }
-}
-
-void GPUNodeBuilder::clearLoops(Function *F) {
-  SmallSet<Loop *, 1> WorkList;
-  for (BasicBlock &BB : *F) {
-    Loop *L = LI.getLoopFor(&BB);
-    if (L)
-      WorkList.insert(L);
-  }
-  for (auto *L : WorkList)
-    LI.erase(L);
 }
 
 std::tuple<Value *, Value *> GPUNodeBuilder::getGridSizes(ppcg_kernel *Kernel) {
@@ -1871,15 +1861,46 @@ void GPUNodeBuilder::createKernel(__isl_take isl_ast_node *KernelStmt) {
   createKernelFunction(Kernel, SubtreeValues, SubtreeFunctions);
   setupKernelSubtreeFunctions(SubtreeFunctions);
 
+  Function *GPUFunc = Builder.GetInsertBlock()->getParent();
+
+  DominatorTree LocalDT(*GPUFunc);
+  LoopInfo LocalLI(LocalDT);
+
+  TargetLibraryInfoImpl TLII(Triple(GPUModule->getTargetTriple()));
+  TargetLibraryInfo TLI(TLII);
+  AssumptionCache AC(*GPUFunc);
+  ScalarEvolution LocalSE(*GPUFunc, TLI, AC, LocalDT, LocalLI);
+
+  DominatorTree *HostDT = GenDT;
+  LoopInfo *HostLI = GenLI;
+  ScalarEvolution *HostSE = GenSE;
+
+  GenDT = &LocalDT;
+  GenLI = &LocalLI;
+  GenSE = &LocalSE;
+  BlockGen.updateGenDT(GenDT);
+  BlockGen.updateGenLI(GenLI);
+  BlockGen.updateGenSE(GenSE);
+
+  errs() << "\n\n=========================================================\n";
+  errs() << "               AST DU KERNEL GPU (PPCG)                  \n";
+  errs() << "=========================================================\n";
+  dumpIslAstNode(Kernel->tree);
+  errs() << "=========================================================\n\n";
+
   create(isl_ast_node_copy(Kernel->tree));
+
+  GenDT = HostDT;
+  GenLI = HostLI;
+  GenSE = HostSE;
+  BlockGen.updateGenDT(GenDT);
+  BlockGen.updateGenLI(GenLI);
+  BlockGen.updateGenSE(GenSE);
 
   finalizeKernelArguments(Kernel);
   Function *F = Builder.GetInsertBlock()->getParent();
   if (Arch == GPUArch::NVPTX64)
     addCUDAAnnotations(F->getParent(), BlockDimX, BlockDimY, BlockDimZ);
-  clearDominators(F);
-  clearScalarEvolution(F);
-  clearLoops(F);
 
   IDToValue = HostIDs;
 
@@ -2337,7 +2358,7 @@ void GPUNodeBuilder::createKernelFunction(
   BasicBlock *PrevBlock = Builder.GetInsertBlock();
   auto *EntryBlock = BasicBlock::Create(Builder.getContext(), "entry", FN);
 
-  DT.addNewBlock(EntryBlock, PrevBlock);
+  // DT.addNewBlock(EntryBlock, PrevBlock);
 
   Builder.SetInsertPoint(EntryBlock);
   Builder.CreateRetVoid();
@@ -2409,6 +2430,14 @@ std::string GPUNodeBuilder::createKernelASM() {
 
   std::unique_ptr<TargetMachine> TargetM(GPUTarget->createTargetMachine(
       GPUTriple, Subtarget, "", Options, std::nullopt));
+
+  GPUModule->setDataLayout(TargetM->createDataLayout());
+
+  errs() << "\n\n=========================================================\n";
+  errs() << "               LLVM IR DU KERNEL GPU                     \n";
+  errs() << "=========================================================\n";
+  GPUModule->print(errs(), nullptr);
+  errs() << "=========================================================\n\n";
 
   SmallString<0> ASMString;
   raw_svector_ostream ASMStream(ASMString);
@@ -3606,6 +3635,7 @@ public:
 
       Builder.SetInsertPoint(&*StartBlock->begin());
 
+      dumpIslAstNode(Root);
       NodeBuilder.create(Root);
     }
 
@@ -3617,6 +3647,363 @@ public:
 
     if (!NodeBuilder.BuildSuccessful)
       CondBr->setOperand(0, Builder.getFalse());
+  }
+
+  void dumpPpcgScop(const struct ppcg_scop *Scop) {
+    if (!Scop) {
+      llvm::errs() << "=== PPCG SCOP is NULL ===\n";
+      return;
+    }
+
+    // 1. Récupération du contexte ISL.
+    // On en a besoin pour initialiser le printer. On le pique au premier objet
+    // valide.
+    isl_ctx *Ctx = nullptr;
+    if (Scop->context)
+      Ctx = isl_set_get_ctx(Scop->context);
+    else if (Scop->domain)
+      Ctx = isl_union_set_get_ctx(Scop->domain);
+
+    if (!Ctx) {
+      llvm::errs() << "=== PPCG SCOP (Vide ou Contexte introuvable) ===\n";
+      return;
+    }
+
+    // 2. Lambda magique pour printer n'importe quel objet ISL proprement
+    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn) {
+      llvm::errs() << "  * " << Name << ": ";
+      if (!Obj) {
+        llvm::errs() << "(NULL)\n";
+        return;
+      }
+      isl_printer *P = isl_printer_to_str(Ctx);
+      // Optionnel : formater de manière plus lisible si l'objet est gros
+      // p = isl_printer_set_yaml_style(p, ISL_YAML_STYLE_BLOCK);
+
+      P = PrintFn(P, Obj);
+      char *Str = isl_printer_get_str(P);
+      llvm::errs() << (Str ? Str : "(ERROR)") << "\n";
+      free(Str);
+      isl_printer_free(P);
+    };
+
+    // 3. Affichage formaté
+    llvm::errs()
+        << "\n=========================================================\n";
+    llvm::errs()
+        << "                     PPCG SCOP DUMP                      \n";
+    llvm::errs()
+        << "=========================================================\n";
+
+    llvm::errs() << "[Metadata]\n";
+    llvm::errs() << "  * Region bounds: [" << Scop->start << ", " << Scop->end
+                 << "]\n";
+    llvm::errs() << "  * Has Options:   " << (Scop->options ? "Yes" : "No")
+                 << "\n";
+    llvm::errs() << "  * Has Pet_Scop:  " << (Scop->pet ? "Yes" : "No") << "\n";
+    llvm::errs() << "  * Has Names Map: " << (Scop->names ? "Yes" : "No")
+                 << "\n\n";
+
+    llvm::errs() << "[Base Sets]\n";
+    PrintISLObj("Context", Scop->context, isl_printer_print_set);
+    PrintISLObj("Domain ", Scop->domain, isl_printer_print_union_set);
+    PrintISLObj("Call   ", Scop->call, isl_printer_print_union_set);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Memory Accesses]\n";
+    PrintISLObj("Reads             ", Scop->reads, isl_printer_print_union_map);
+    PrintISLObj("Tagged Reads      ", Scop->tagged_reads,
+                isl_printer_print_union_map);
+    PrintISLObj("May Writes        ", Scop->may_writes,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged May Writes ", Scop->tagged_may_writes,
+                isl_printer_print_union_map);
+    PrintISLObj("Must Writes       ", Scop->must_writes,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged Must Writes", Scop->tagged_must_writes,
+                isl_printer_print_union_map);
+    PrintISLObj("Must Kills        ", Scop->must_kills,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged Must Kills ", Scop->tagged_must_kills,
+                isl_printer_print_union_map);
+    PrintISLObj("Live In           ", Scop->live_in,
+                isl_printer_print_union_map);
+    PrintISLObj("Live Out          ", Scop->live_out,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Dependencies]\n";
+    PrintISLObj("Independence    ", Scop->independence,
+                isl_printer_print_union_map);
+    PrintISLObj("Dep Flow        ", Scop->dep_flow,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged Dep Flow ", Scop->tagged_dep_flow,
+                isl_printer_print_union_map);
+    PrintISLObj("Dep False       ", Scop->dep_false,
+                isl_printer_print_union_map);
+    PrintISLObj("Dep Forced      ", Scop->dep_forced,
+                isl_printer_print_union_map);
+    PrintISLObj("Dep Order       ", Scop->dep_order,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged Dep Order", Scop->tagged_dep_order,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Scheduling & Tagging]\n";
+    PrintISLObj("Tagger  ", Scop->tagger, isl_printer_print_union_pw_multi_aff);
+    PrintISLObj("Schedule", Scop->schedule, isl_printer_print_schedule);
+
+    llvm::errs()
+        << "=========================================================\n\n";
+  }
+
+  void dumpGPUArrayInfo(const struct gpu_array_info *Array) {
+    if (!Array) {
+      llvm::errs() << "=== GPU ARRAY INFO is NULL ===\n";
+      return;
+    }
+
+    // Astuce : On récupère le contexte ISL via l'espace du tableau
+    isl_ctx *ctx = nullptr;
+    if (Array->space)
+      ctx = isl_space_get_ctx(Array->space);
+    else if (Array->extent)
+      ctx = isl_set_get_ctx(Array->extent);
+
+    // La lambda d'impression ISL
+    auto PrintISLObj = [ctx](const char *Name, auto *Obj, auto PrintFn) {
+      llvm::errs() << "  * " << Name << ": ";
+      if (!Obj) {
+        llvm::errs() << "(NULL)\n";
+        return;
+      }
+      if (!ctx) {
+        llvm::errs() << "(Cannot print: No ISL Context found)\n";
+        return;
+      }
+      isl_printer *P = isl_printer_to_str(ctx);
+      P = PrintFn(P, Obj);
+      char *Str = isl_printer_get_str(P);
+      llvm::errs() << (Str ? Str : "(ERROR)") << "\n";
+      free(Str);
+      isl_printer_free(P);
+    };
+
+    // Lambda utilitaire pour afficher les booléens plus lisiblement
+    auto PrintFlag = [](const char *Name, int Val) {
+      llvm::errs() << "  * " << Name << ": " << (Val ? "Yes" : "No") << "\n";
+    };
+
+    llvm::errs()
+        << "\n---------------------------------------------------------\n";
+    llvm::errs() << " Array Name : "
+                 << (Array->name ? Array->name : "ANONYMOUS") << "\n";
+    llvm::errs()
+        << "---------------------------------------------------------\n";
+
+    llvm::errs() << "[Identity & Type]\n";
+    llvm::errs() << "  * Type:         "
+                 << (Array->type ? Array->type : "(NULL)") << "\n";
+    llvm::errs() << "  * Element Size: " << Array->size << " bytes\n";
+    llvm::errs() << "  * Dimensions:   " << Array->n_index << "\n";
+    PrintISLObj("Space       ", Array->space, isl_printer_print_space);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Flags & Placement]\n";
+    PrintFlag("Accessed            ", Array->accessed);
+    PrintFlag("Global (Device Mem) ", Array->global);
+    PrintFlag("Local to Scop       ", Array->local);
+    PrintFlag("Declare Local (Host)", Array->declare_local);
+    PrintFlag("Read-only Scalar    ", Array->read_only_scalar);
+    PrintFlag("Compound Element    ", Array->has_compound_element);
+    PrintFlag("Fixed Element Access", Array->only_fixed_element);
+    PrintFlag("Linearize           ", Array->linearize);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Memory Extents & Bounds (ISL)]\n";
+    PrintISLObj("Declared Extent", Array->declared_extent,
+                isl_printer_print_set);
+    PrintISLObj("Used Extent    ", Array->extent, isl_printer_print_set);
+    PrintISLObj("Bound          ", Array->bound,
+                isl_printer_print_multi_pw_aff);
+    PrintISLObj("Dep Order      ", Array->dep_order,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Code Generation (AST Expr)]\n";
+    PrintISLObj("Declared Size Expr", Array->declared_size,
+                isl_printer_print_ast_expr);
+    PrintISLObj("Bound Expr        ", Array->bound_expr,
+                isl_printer_print_ast_expr);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Internal Pointers]\n";
+    llvm::errs() << "  * Number of references: " << Array->n_ref << "\n";
+    if (Array->refs && Array->n_ref > 0) {
+      llvm::errs() << "    -> Array of refs at " << (void *)Array->refs << "\n";
+    }
+    llvm::errs() << "  * User Pointer (Polly): " << Array->user << "\n";
+    llvm::errs()
+        << "---------------------------------------------------------\n";
+  }
+
+  void dumpGpuProg(const struct gpu_prog *Prog) {
+    if (!Prog) {
+      llvm::errs() << "=== GPU PROG is NULL ===\n";
+      return;
+    }
+
+    // Ici, on a le contexte ISL directement sous la main !
+    isl_ctx *Ctx = Prog->ctx;
+    if (!Ctx) {
+      llvm::errs() << "=== GPU PROG (ISL Context is NULL) ===\n";
+      return;
+    }
+
+    // La même lambda magique pour les objets ISL
+    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn) {
+      llvm::errs() << "  * " << Name << ": ";
+      if (!Obj) {
+        llvm::errs() << "(NULL)\n";
+        return;
+      }
+      isl_printer *P = isl_printer_to_str(Ctx);
+      P = PrintFn(P, Obj);
+      char *Str = isl_printer_get_str(P);
+      llvm::errs() << (Str ? Str : "(ERROR)") << "\n";
+      free(Str);
+      isl_printer_free(P);
+    };
+
+    llvm::errs()
+        << "\n=========================================================\n";
+    llvm::errs()
+        << "                     GPU PROG DUMP                       \n";
+    llvm::errs()
+        << "=========================================================\n";
+
+    llvm::errs() << "[Metadata & Pointers]\n";
+    llvm::errs() << "  * ISL Context: " << (void *)Prog->ctx << "\n";
+    llvm::errs() << "  * PPCG Scop:   " << (Prog->scop ? "(present)" : "(NULL)")
+                 << "\n\n";
+
+    llvm::errs() << "[Global Sets]\n";
+    PrintISLObj("Context         ", Prog->context, isl_printer_print_set);
+    PrintISLObj("May Persist     ", Prog->may_persist,
+                isl_printer_print_union_set);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Program-wide Memory Accesses]\n";
+    PrintISLObj("Read            ", Prog->read, isl_printer_print_union_map);
+    PrintISLObj("May Write       ", Prog->may_write,
+                isl_printer_print_union_map);
+    PrintISLObj("Must Write      ", Prog->must_write,
+                isl_printer_print_union_map);
+    PrintISLObj("Tagged Must Kill", Prog->tagged_must_kill,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Array Mappings & Dependencies]\n";
+    PrintISLObj("To Outer        ", Prog->to_outer,
+                isl_printer_print_union_map);
+    PrintISLObj("To Inner        ", Prog->to_inner,
+                isl_printer_print_union_map);
+    PrintISLObj("Any To Outer    ", Prog->any_to_outer,
+                isl_printer_print_union_map);
+    PrintISLObj("Array Order     ", Prog->array_order,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Statements & Arrays (Counts)]\n";
+    llvm::errs() << "  * Number of Statements: " << Prog->n_stmts << "\n";
+    if (Prog->n_stmts > 0 && Prog->stmts) {
+      llvm::errs() << "    -> Array of stmts allocated at "
+                   << (void *)Prog->stmts << "\n";
+    }
+
+    llvm::errs() << "  * Number of Arrays:     " << Prog->n_array << "\n";
+    if (Prog->n_array > 0 && Prog->array) {
+      for (int I = 0; I < Prog->n_array; ++I) {
+        dumpGPUArrayInfo(&Prog->array[I]);
+      }
+    }
+
+    llvm::errs()
+        << "=========================================================\n\n";
+  }
+
+  void dumpGpuGen(const struct gpu_gen *Gen) {
+    if (!Gen) {
+      llvm::errs() << "=== GPU GEN is NULL ===\n";
+      return;
+    }
+
+    isl_ctx *Ctx = Gen->ctx;
+    if (!Ctx) {
+      llvm::errs() << "=== GPU GEN (ISL Context is NULL) ===\n";
+      return;
+    }
+
+    // Lambda pour l'impression des objets ISL
+    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn) {
+      llvm::errs() << "  * " << Name << ": ";
+      if (!Obj) {
+        llvm::errs() << "(NULL)\n";
+        return;
+      }
+      isl_printer *P = isl_printer_to_str(Ctx);
+
+      // Pour l'AST, le format bloc (C-like) est beaucoup plus lisible
+      P = isl_printer_set_output_format(P, ISL_FORMAT_C);
+
+      P = PrintFn(P, Obj);
+      char *Str = isl_printer_get_str(P);
+      llvm::errs() << (Str ? Str : "(ERROR)") << "\n";
+      free(Str);
+      isl_printer_free(P);
+    };
+
+    llvm::errs()
+        << "\n=========================================================\n";
+    llvm::errs()
+        << "                     GPU GEN DUMP                        \n";
+    llvm::errs()
+        << "=========================================================\n";
+
+    llvm::errs() << "[Metadata & Core Pointers]\n";
+    llvm::errs() << "  * ISL Context: " << (void *)Gen->ctx << "\n";
+    llvm::errs() << "  * Options:     "
+                 << (Gen->options ? "(present)" : "(NULL)") << "\n";
+    llvm::errs() << "  * GPU Prog:    " << (Gen->prog ? "(present)" : "(NULL)")
+                 << "\n";
+    llvm::errs() << "  * Kernel ID:   " << Gen->kernel_id
+                 << " (Next kernel to be generated)\n\n";
+
+    llvm::errs() << "[Callbacks (Function Pointers)]\n";
+    llvm::errs() << "  * print_ast_expr: " << (void *)Gen->print
+                 << " (User: " << Gen->print_user << ")\n";
+    llvm::errs() << "  * build_ast_expr: " << (void *)Gen->build_ast_expr
+                 << "\n\n";
+
+    llvm::errs() << "[Kernel Sizing (Block & Grid configurations)]\n";
+    PrintISLObj("Requested Sizes", Gen->sizes, isl_printer_print_union_map);
+    PrintISLObj("Used Sizes     ", Gen->used_sizes,
+                isl_printer_print_union_map);
+    llvm::errs() << "\n";
+
+    llvm::errs() << "[Generated AST (The Code!)]\n";
+    if (Gen->tree) {
+      llvm::errs()
+          << "---------------------------------------------------------\n";
+      PrintISLObj("Tree", Gen->tree, isl_printer_print_ast_node);
+      llvm::errs()
+          << "---------------------------------------------------------\n";
+    } else {
+      llvm::errs() << "  * Tree: (NULL) -> No code was generated!\n";
+    }
+
+    llvm::errs()
+        << "=========================================================\n\n";
   }
 
   bool run(Scop &Scop, LoopInfo &LInfo, DominatorTree &DTree,
@@ -3646,8 +4033,11 @@ public:
     }
 
     auto *PPCGScop = createPPCGScop();
+    dumpPpcgScop(PPCGScop);
     auto *PPCGProg = createPPCGProg(PPCGScop);
+    dumpGpuProg(PPCGProg);
     auto *PPCGGen = generateGPU(PPCGScop, PPCGProg);
+    dumpGpuGen(PPCGGen);
 
     if (PPCGGen->tree) {
       generateCode(isl_ast_node_copy(PPCGGen->tree), PPCGProg);

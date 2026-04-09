@@ -9,6 +9,7 @@
 #include "polly/Pass/PhaseManager.h"
 #include "polly/CodeGen/CodeGeneration.h"
 #include "polly/CodeGen/IslAst.h"
+#include "polly/CodeGen/PPCGCodeGeneration.h"
 #include "polly/CodePreparation.h"
 #include "polly/DeLICM.h"
 #include "polly/DeadCodeElimination.h"
@@ -349,26 +350,37 @@ public:
       if (Opts.isPhaseEnabled(PassPhase::CheckParallelism))
         runCheckParallelism(*S);
 
-      // Phase: opt-isl
-      if (Opts.isPhaseEnabled(PassPhase::Optimization))
-        runIslScheduleOptimizer(*S, &TTI, DA);
-      if (Opts.isPhaseEnabled(PassPhase::OptimizationPluto))
-        runPlutoScheduleOptimizer(*S);
+      if (F.hasFnAttribute("polly.backend")) {
+        auto BackendAttr = F.getFnAttribute("polly.backend");
+        std::string Backend = BackendAttr.getValueAsString().str();
+      }
 
-      // Phase: import-jscop
-      if (Opts.isPhaseEnabled(PassPhase::ExportJScop))
-        runExportJSON(*S);
+      bool ModifiedByCodeGen = false;
+      if (readBackend(F) == Backend::GPU) {
+        ModifiedByCodeGen = runPPCGCodeGeneration(
+            *S, polly::GPUArchChoice, GPURuntimeChoice, LI2, DT2, SE, DL, RI);
+      } else {
+        // Phase: opt-isl
+        if (Opts.isPhaseEnabled(PassPhase::Optimization))
+          runIslScheduleOptimizer(*S, &TTI, DA);
+        if (Opts.isPhaseEnabled(PassPhase::OptimizationPluto))
+          runPlutoScheduleOptimizer(*S);
 
-      // Phase: ast
-      // Cannot run codegen unless ast is enabled
-      if (!Opts.isPhaseEnabled(PassPhase::AstGen))
-        continue;
-      std::unique_ptr<IslAstInfo> IslAst = runIslAstGen(*S, DA);
+        // Phase: import-jscop
+        if (Opts.isPhaseEnabled(PassPhase::ExportJScop))
+          runExportJSON(*S);
 
-      // Phase: codegen
-      if (!Opts.isPhaseEnabled(PassPhase::CodeGen))
-        continue;
-      bool ModifiedByCodeGen = runCodeGeneration(*S, RI, *IslAst);
+        // Phase: ast
+        // Cannot run codegen unless ast is enabled
+        if (!Opts.isPhaseEnabled(PassPhase::AstGen))
+          continue;
+        std::unique_ptr<IslAstInfo> IslAst = runIslAstGen(*S, DA);
+
+        // Phase: codegen
+        if (!Opts.isPhaseEnabled(PassPhase::CodeGen))
+          continue;
+        ModifiedByCodeGen = runCodeGeneration(*S, RI, *IslAst);
+      }
       if (ModifiedByCodeGen) {
         ModifiedIR = true;
 

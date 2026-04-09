@@ -240,9 +240,6 @@ void BlockGenerator::copyInstScalar(ScopStmt &Stmt, Instruction *Inst,
   Builder.Insert(NewInst);
   BBMap[Inst] = NewInst;
 
-  assert(NewInst->getModule() == Inst->getModule() &&
-         "Expecting instructions to be in the same module");
-
   if (!NewInst->getType()->isVoidTy())
     NewInst->setName("p_" + Inst->getName());
 }
