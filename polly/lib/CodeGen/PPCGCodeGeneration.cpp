@@ -1394,7 +1394,8 @@ void GPUNodeBuilder::createKernelSync() {
     break;
   }
   case GPUArch::NVPTX64: {
-    Builder.CreateIntrinsic(Intrinsic::nvvm_barrier_cta_sync_all, {});
+    Builder.CreateIntrinsic(Intrinsic::nvvm_barrier_cta_sync_all, {},
+                            {Builder.getInt32(0)});
     break;
   }
   }
