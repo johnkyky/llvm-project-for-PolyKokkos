@@ -103,6 +103,8 @@ public:
 
   /// Execute Polly's phases as indicated by the options.
   bool run() {
+    if (not F.hasFnAttribute("polly.findSCoP"))
+      return false;
     // Get analyses from the function pass manager.
     // These must be preserved during all phases so that if processing one SCoP
     // has finished, the next SCoP can still use them. Recomputing is not an
