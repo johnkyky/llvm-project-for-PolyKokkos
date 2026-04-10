@@ -937,6 +937,26 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
   case Comparison::Operator::EQUAL: {
     Instruction *Replacer = findDominatingOrHoistChain(LHSInst, RHSInst, DT);
     Instruction *Replaced = (Replacer == LHSInst) ? RHSInst : LHSInst;
+
+    if (Replacer == Replaced) {
+      return;
+    }
+
+    if (Replacer->getType() != Replaced->getType()) {
+      if (Replaced->getType()->isIntegerTy(64) and
+          Replacer->getType()->isIntegerTy(32)) {
+        Builder.SetInsertPoint(Replaced->getIterator()->getNextNode());
+        auto *Cast =
+            Builder.CreateTrunc(Replaced, Replacer->getType(), "trunc_val");
+        Value *Cmp =
+            Builder.CreateICmp(CmpInst::Predicate::ICMP_EQ, Cast, Replacer);
+        Value *Assumption = Builder.CreateAssumption(Cmp);
+        errs() << "Registering assumption " << *Cmp << " -> " << *Assumption
+               << "\n";
+        return;
+      }
+    }
+
     LLVM_DEBUG(errs() << "Replacing " << *Replaced << " with " << *Replacer
                       << "\n");
     Replaced->replaceAllUsesWith(Replacer);
