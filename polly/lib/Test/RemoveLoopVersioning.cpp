@@ -356,9 +356,11 @@ void removeUnswitchedBranches(Function &F, LoopInfo &LI, PostDominatorTree &PDT,
     if (BranchInst *Branch = dyn_cast<BranchInst>(Term)) {
       IRBuilder<> Builder(Branch);
       Value *Condition = nullptr;
-      if (Branch->getSuccessor(0) == VersionnedBB) {
+      if (Branch->getSuccessor(0) == VersionnedBB or
+          DT.dominates(Branch->getSuccessor(0), VersionnedBB)) {
         Condition = Builder.getTrue();
-      } else if (Branch->getSuccessor(1) == VersionnedBB) {
+      } else if (Branch->getSuccessor(1) == VersionnedBB or
+                 DT.dominates(Branch->getSuccessor(1), VersionnedBB)) {
         Condition = Builder.getFalse();
       } else {
         llvm_unreachable("VersionnedBB is not a successor of the branch");
