@@ -115,8 +115,12 @@ const PeelResult computeDuration(ScalarEvolution &SE,
   errs().indent(6) << "AddRec Start: " << *Start << ", Step: " << StepVal
                    << "\n";
 
-  const SCEV *Zero = SE.getZero(Start->getType());
-  const SCEV *One = SE.getOne(Start->getType());
+  llvm::Type *BaseType = SE.getWiderType(Start->getType(), Step->getType());
+  Start = SE.getNoopOrSignExtend(Start, BaseType);
+  Step = SE.getNoopOrSignExtend(Step, BaseType);
+
+  const SCEV *Zero = SE.getZero(BaseType);
+  const SCEV *One = SE.getOne(BaseType);
 
   if (StepVal.isStrictlyPositive()) {
     errs().indent(6) << "Step is positive\n";
@@ -147,7 +151,7 @@ const PeelResult computeDuration(ScalarEvolution &SE,
     // Soit AbsStep = -Step
     // En arithmétique entière : (Start + AbsStep - 1) / AbsStep
 
-    const SCEV *AbsStep = SE.getNegativeSCEV(Step); // Car Step est négatif
+    const SCEV *AbsStep = SE.getNegativeSCEV(Step);
     const SCEV *AbsStepMinusOne = SE.getMinusSCEV(AbsStep, One);
     const SCEV *Numerator = SE.getAddExpr(Start, AbsStepMinusOne);
 
@@ -156,7 +160,11 @@ const PeelResult computeDuration(ScalarEvolution &SE,
     const auto *L = AddRec->getLoop();
     const auto *BTC = SE.getBackedgeTakenCount(L);
 
-    auto *Res = SE.getAbsExpr(SE.getMinusSCEV(BTC, Div), false);
+    llvm::Type *WiderType = SE.getWiderType(BTC->getType(), Div->getType());
+    const SCEV *ExtendedBTC = SE.getNoopOrSignExtend(BTC, WiderType);
+    const SCEV *ExtendedDiv = SE.getNoopOrSignExtend(Div, WiderType);
+
+    auto *Res = SE.getAbsExpr(SE.getMinusSCEV(ExtendedBTC, ExtendedDiv), false);
     return {Res, PeelDirection::BACK, AddRec->getLoop()};
   }
 
