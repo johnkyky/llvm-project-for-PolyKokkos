@@ -80,7 +80,7 @@ endif ()
 
 SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
-option(POLLY_ENABLE_GPGPU_CODEGEN "Enable GPGPU code generation feature" ON)
+option(POLLY_ENABLE_GPGPU_CODEGEN "Enable GPGPU code generation feature" OFF)
 set(GPU_CODEGEN FALSE)
 
 if (POLLY_ENABLE_GPGPU_CODEGEN)

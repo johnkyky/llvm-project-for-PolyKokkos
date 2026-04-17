@@ -6,6 +6,13 @@ set(ISL_CODEGEN_FILES
     CodeGen/IslNodeBuilder.cpp
     CodeGen/CodeGeneration.cpp)
 
+if (GPU_CODEGEN)
+  set (GPGPU_CODEGEN_FILES
+       CodeGen/PPCGCodeGeneration.cpp
+       CodeGen/ManagedMemoryRewrite.cpp
+       )
+endif (GPU_CODEGEN)
+
 # Compile ISL into a separate library.
 add_subdirectory(External)
 
@@ -58,8 +65,6 @@ add_llvm_pass_plugin(Polly
   CodeGen/IRBuilder.cpp
   CodeGen/Utils.cpp
   CodeGen/RuntimeDebugBuilder.cpp
-  CodeGen/ManagedMemoryRewrite.cpp
-  CodeGen/PPCGCodeGeneration.cpp
   CodeGen/PerfMonitor.cpp
   Exchange/JSONExporter.cpp
   Pass/PhaseManager.cpp
@@ -112,6 +117,7 @@ add_llvm_pass_plugin(Polly
   Test/PrintParamsValue.cpp
   Test/MergeRedundantInvariantLoads.cpp
   Test/LowerInstructionForReduction.cpp
+  ${GPGPU_CODEGEN_FILES}
 
   ${POLLY_HEADER_FILES}
 
