@@ -35,8 +35,7 @@ extern GPUArch GPUArchChoice;
 /// @}
 } // namespace polly
 
-bool runPPCGCodeGeneration(Scop &S, GPUArch Arch, GPURuntime Runtime,
-                           LoopInfo &LInfo, DominatorTree &DTree,
+bool runPPCGCodeGeneration(Scop &S, LoopInfo &LInfo, DominatorTree &DTree,
                            ScalarEvolution &SEvolution,
                            const DataLayout &DLayout, RegionInfo &RInfo);
 

@@ -359,8 +359,7 @@ public:
 
       bool ModifiedByCodeGen = false;
       if (readBackend(F) == Backend::GPU) {
-        ModifiedByCodeGen = runPPCGCodeGeneration(
-            *S, polly::GPUArchChoice, GPURuntimeChoice, LI2, DT2, SE, DL, RI);
+        ModifiedByCodeGen = runPPCGCodeGeneration(*S, LI2, DT2, SE, DL, RI);
       } else {
         // Phase: opt-isl
         if (Opts.isPhaseEnabled(PassPhase::Optimization))

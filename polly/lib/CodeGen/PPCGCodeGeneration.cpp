@@ -4058,13 +4058,12 @@ public:
 };
 } // namespace
 
-bool runPPCGCodeGeneration(Scop &S, GPUArch Arch, GPURuntime Runtime,
-                           LoopInfo &LInfo, DominatorTree &DTree,
+bool runPPCGCodeGeneration(Scop &S, LoopInfo &LInfo, DominatorTree &DTree,
                            ScalarEvolution &SEvolution,
                            const DataLayout &DLayout, RegionInfo &RInfo) {
   PPCGCodeGeneration *Generator = new PPCGCodeGeneration();
-  Generator->Runtime = Runtime;
-  Generator->Architecture = Arch;
+  Generator->Runtime = polly::GPURuntimeChoice;
+  Generator->Architecture = polly::GPUArchChoice;
 
   return Generator->run(S, LInfo, DTree, SEvolution, DLayout, RInfo);
 }
