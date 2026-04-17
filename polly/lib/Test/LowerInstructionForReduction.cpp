@@ -127,7 +127,7 @@ LowerInstructionForReductionPass::run(Function &F,
                     << "\n");
 
   lowerFmulAdd(F);
-  lowerFSub(F);
+  // lowerFSub(F);
 
   if (verifyFunction(F, &errs())) {
     report_fatal_error("IR verification failed.");
