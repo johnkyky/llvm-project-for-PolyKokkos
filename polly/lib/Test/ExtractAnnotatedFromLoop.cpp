@@ -24,6 +24,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -225,6 +226,16 @@ bool extractLoopBoundAnnotation(Function &F, LoopInfo &LI, DominatorTree &DT) {
           llvm::MDNode *Node = llvm::MDNode::get(
               Ctx,
               {PolicyIndexMetadata, BoundLoopKindMetadata, DepthLoopMetadata});
+
+          if (auto *Cast = dyn_cast<CastInst>(Inst)) {
+            Inst = dyn_cast<Instruction>(Cast->getOperand(0));
+            if (not Inst)
+              llvm_unreachable(
+                  "Loop bound annotation operand is not an instruction");
+            errs() << "Loop bound annotation on cast instruction, applying to "
+                      "operand: "
+                   << *Inst << "\n";
+          }
           Inst->setMetadata("loop_bound_information", Node);
           Res = true;
         }

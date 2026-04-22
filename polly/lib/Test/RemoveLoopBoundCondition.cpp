@@ -41,6 +41,7 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Value *LeftOpVal,
                              ICmpInst::Predicate Predica,
                              const Value *RightOpVal, const ICmpInst *ICmp) {
   switch (Predica) {
+  case ICmpInst::ICMP_SLT:
   case ICmpInst::ICMP_ULT: {
     bool LeftIsConst = isa<ConstantInt>(LeftOpVal);
     bool RightIsConst = isa<ConstantInt>(RightOpVal);
@@ -89,7 +90,6 @@ BasicBlock *getTrueCondition(BranchInst *Branch, const Value *LeftOpVal,
     break;
   }
   default:
-    errs() << "bute\n";
     llvm_unreachable("Unsupported loop bound condition");
     break;
   }
@@ -131,6 +131,11 @@ void removeLoopBoundConditions(Function &F,
     const auto *LHSInst = dyn_cast_or_null<Instruction>(LHS);
     const auto *RHSInst = dyn_cast_or_null<Instruction>(RHS);
 
+    if (auto *LCast = llvm::dyn_cast_or_null<CastInst>(LHSInst))
+      LHSInst = llvm::dyn_cast<llvm::Instruction>(LCast->getOperand(0));
+    if (auto *RCast = llvm::dyn_cast_or_null<llvm::CastInst>(RHSInst))
+      RHSInst = llvm::dyn_cast<llvm::Instruction>(RCast->getOperand(0));
+
     auto *ItLeft = LoopBounds.end();
     auto *ItRight = LoopBounds.end();
 
@@ -165,6 +170,25 @@ void removeLoopBoundConditions(Function &F,
 
         errs() << "LHS : " << *LHS << "\n";
         errs() << "RHS : " << *RHS << "\n";
+
+        if (auto *LCast = llvm::dyn_cast_or_null<CastInst>(LHS)) {
+          if (isa<Instruction>(LCast->getOperand(0)))
+            LHS = llvm::dyn_cast<llvm::Instruction>(LCast->getOperand(0));
+          else if (isa<ConstantInt>(LCast->getOperand(0)))
+            LHS = llvm::dyn_cast<llvm::ConstantInt>(LCast->getOperand(0));
+          else
+            llvm_unreachable("Loop bound annotation operand is neither an "
+                             "instruction nor a constant integer");
+        }
+        if (auto *RCast = llvm::dyn_cast_or_null<llvm::CastInst>(RHS)) {
+          if (isa<Instruction>(RCast->getOperand(0)))
+            RHS = llvm::dyn_cast<llvm::Instruction>(RCast->getOperand(0));
+          else if (isa<ConstantInt>(RCast->getOperand(0)))
+            RHS = llvm::dyn_cast<llvm::ConstantInt>(RCast->getOperand(0));
+          else
+            llvm_unreachable("Loop bound annotation operand is neither an "
+                             "instruction nor a constant integer");
+        }
 
         if (not CheckInstIsLoopBounds(LHS, RHS, ICmp))
           continue;

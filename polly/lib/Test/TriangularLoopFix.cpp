@@ -94,6 +94,20 @@ struct PeelResult {
   }
 };
 
+struct StripZextTruncVisitor
+    : public SCEVRewriteVisitor<StripZextTruncVisitor> {
+  StripZextTruncVisitor(ScalarEvolution &SE) : SCEVRewriteVisitor(SE) {}
+
+  const SCEV *visitZeroExtendExpr(const SCEVZeroExtendExpr *Expr) {
+    if (auto *Trunc = dyn_cast<SCEVTruncateExpr>(Expr->getOperand())) {
+      if (Trunc->getOperand()->getType() == Expr->getType()) {
+        return visit(Trunc->getOperand());
+      }
+    }
+    return SCEVRewriteVisitor::visitZeroExtendExpr(Expr);
+  }
+};
+
 const PeelResult computeDuration(ScalarEvolution &SE,
                                  const SCEVAddRecExpr *AddRec) {
   if (not AddRec->isAffine()) {
@@ -159,6 +173,9 @@ const PeelResult computeDuration(ScalarEvolution &SE,
 
     const auto *L = AddRec->getLoop();
     const auto *BTC = SE.getBackedgeTakenCount(L);
+
+    StripZextTruncVisitor Cleaner(SE);
+    BTC = Cleaner.visit(BTC);
 
     llvm::Type *WiderType = SE.getWiderType(BTC->getType(), Div->getType());
     const SCEV *ExtendedBTC = SE.getNoopOrSignExtend(BTC, WiderType);

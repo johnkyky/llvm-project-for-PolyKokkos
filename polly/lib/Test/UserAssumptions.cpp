@@ -720,7 +720,7 @@ bool hoistInstructionChain(Instruction *I, BasicBlock *TargetBlock,
       errs() << "  Hoisting: " << *Inst << "\n";
     }
     for (Instruction *Inst : InstructionsToMove) {
-      Inst->moveBefore(InsertionPoint);
+      Inst->moveBefore(InsertionPoint->getIterator());
     }
     return true;
   }
@@ -763,18 +763,40 @@ void applyNotLiteralVsLiteral(Comparison &C, Function &F, IRBuilder<> &Builder,
     LLVM_DEBUG(errs() << "Replacing " << *Inst << " with constant " << *ConstVal
                       << "\n");
 
+    SmallVector<Instruction *, 4> FindICmp;
     for (auto *User : Inst->users()) {
       if (auto *ICmp = dyn_cast<ICmpInst>(User)) {
-        Module *M = Inst->getModule();
-        unsigned SourceKindID = M->getMDKindID("loop_bound_information");
-        unsigned DestKindID = M->getMDKindID("old_loop_bound");
+        FindICmp.push_back(ICmp);
+      }
+      if (auto *Cast = dyn_cast<CastInst>(User)) {
+        for (auto *CastUser : Cast->users()) {
+          if (auto *ICmp = dyn_cast<ICmpInst>(CastUser)) {
+            FindICmp.push_back(ICmp);
+          }
+        }
+      }
+    }
+    for (auto *ICmp : FindICmp) {
+      errs() << "   User is an ICmpInst: " << *ICmp << "\n";
+    }
+    for (auto *ICmp : FindICmp) {
+      Module *M = Inst->getModule();
+      unsigned SourceKindID = M->getMDKindID("loop_bound_information");
+      unsigned DestKindID = M->getMDKindID("old_loop_bound");
 
-        if (MDNode *Node = Inst->getMetadata(SourceKindID))
-          ICmp->setMetadata(DestKindID, Node);
+      if (MDNode *Node = Inst->getMetadata(SourceKindID)) {
+        ICmp->setMetadata(DestKindID, Node);
+        errs() << "   Transferred metadata from " << *Inst << " to " << *ICmp
+               << "\n";
       }
     }
 
     Inst->replaceAllUsesWith(ConstVal);
+
+    Builder.SetInsertPoint(Inst->getParent(), std::next(Inst->getIterator()));
+    Value *Cmp = Builder.CreateICmp(CmpInst::Predicate::ICMP_EQ, Inst, ConstVal,
+                                    "cmp_eq");
+    CallInst *Assumption = Builder.CreateAssumption(Cmp);
 
     LHS.IsLiteral = true;
     LHS.LiteralValue = RHS;
@@ -943,14 +965,18 @@ void applyNotLiteralVsNotLiteral(Comparison &C, Function &F,
     }
 
     if (Replacer->getType() != Replaced->getType()) {
-      if (Replaced->getType()->isIntegerTy(64) and
-          Replacer->getType()->isIntegerTy(32)) {
-        Builder.SetInsertPoint(Replaced->getIterator()->getNextNode());
-        auto *Cast =
-            Builder.CreateTrunc(Replaced, Replacer->getType(), "trunc_val");
-        Value *Cmp =
-            Builder.CreateICmp(CmpInst::Predicate::ICMP_EQ, Cast, Replacer);
-        Value *Assumption = Builder.CreateAssumption(Cmp);
+      if (Replaced->getType()->isIntegerTy() &&
+          Replacer->getType()->isIntegerTy()) {
+
+        Builder.SetInsertPoint(Replaced->getParent(),
+                               std::next(Replaced->getIterator()));
+
+        Value *Cast = Builder.CreateZExtOrTrunc(Replaced, Replacer->getType(),
+                                                "cast_val");
+        Value *Cmp = Builder.CreateICmp(CmpInst::Predicate::ICMP_EQ, Cast,
+                                        Replacer, "cmp_eq");
+        CallInst *Assumption = Builder.CreateAssumption(Cmp);
+
         errs() << "Registering assumption " << *Cmp << " -> " << *Assumption
                << "\n";
         return;
@@ -1082,7 +1108,7 @@ bool polly::hoistInstructionChain(Instruction *I, BasicBlock *TargetBlock,
       errs() << "  Hoisting: " << *Inst << "\n";
     }
     for (Instruction *Inst : InstructionsToMove) {
-      Inst->moveBefore(InsertionPoint);
+      Inst->moveBefore(InsertionPoint->getIterator());
     }
     return true;
   }
