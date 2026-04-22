@@ -21,6 +21,7 @@
 #include "polly/Options.h"
 #include "polly/ScopDetection.h"
 #include "polly/ScopInfo.h"
+#include "polly/Support/ISLOStream.h"
 #include "polly/Support/ISLTools.h"
 #include "polly/Support/SCEVValidator.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -1483,7 +1484,8 @@ static bool isValidFunctionInKernel(llvm::Function *F, bool AllowLibDevice) {
   return F->isIntrinsic() &&
          (Name.starts_with("llvm.sqrt") || Name.starts_with("llvm.fabs") ||
           Name.starts_with("llvm.copysign") or
-          Name.starts_with("llvm.annotation"));
+          Name.starts_with("llvm.annotation") or
+          Name.starts_with("llvm.fmuladd"));
 }
 
 /// Do not take `Function` as a subtree value.
@@ -2820,20 +2822,39 @@ public:
     PPCGScop->start = 0;
     PPCGScop->end = 0;
 
-    PPCGScop->context = S->getContext().release();
-    PPCGScop->domain = S->getDomains().release();
+    isl::set BaseContext = S->getContext();
+    isl::set AssumedContext = S->getAssumedContext();
+    isl::set BehaviorContext = S->getDefinedBehaviorContext();
+    isl::set TightContext =
+        BaseContext.intersect(AssumedContext).intersect(BehaviorContext);
+    PPCGScop->context = TightContext.copy();
+    // PPCGScop->context = S->getContext().release();
+    // PPCGScop->domain = S->getDomains().release();
+    PPCGScop->domain = isl_union_set_intersect_params(S->getDomains().release(),
+                                                      TightContext.copy());
     // TODO: investigate this further. PPCG calls collect_call_domains.
-    PPCGScop->call = isl_union_set_from_set(S->getContext().release());
-    PPCGScop->tagged_reads = getTaggedReads();
-    PPCGScop->reads = S->getReads().release();
+    // PPCGScop->call = isl_union_set_from_set(S->getContext().release());
+    // 2. Fix du Call
+    isl_space *Space = isl_set_get_space(PPCGScop->context);
+    PPCGScop->call = isl_union_set_empty(Space);
+    PPCGScop->tagged_reads =
+        isl_union_map_intersect_params(getTaggedReads(), TightContext.copy());
+    PPCGScop->reads = isl_union_map_intersect_params(S->getReads().release(),
+                                                     TightContext.copy());
     PPCGScop->live_in = nullptr;
-    PPCGScop->tagged_may_writes = getTaggedMayWrites();
-    PPCGScop->may_writes = S->getWrites().release();
-    PPCGScop->tagged_must_writes = getTaggedMustWrites();
-    PPCGScop->must_writes = S->getMustWrites().release();
+    PPCGScop->tagged_may_writes = isl_union_map_intersect_params(
+        getTaggedMayWrites(), TightContext.copy());
+    PPCGScop->may_writes = isl_union_map_intersect_params(
+        S->getWrites().release(), TightContext.copy());
+    PPCGScop->tagged_must_writes = isl_union_map_intersect_params(
+        getTaggedMustWrites(), TightContext.copy());
+    PPCGScop->must_writes = isl_union_map_intersect_params(
+        S->getMustWrites().release(), TightContext.copy());
     PPCGScop->live_out = nullptr;
-    PPCGScop->tagged_must_kills = KillsInfo.TaggedMustKills.release();
-    PPCGScop->must_kills = KillsInfo.MustKills.release();
+    PPCGScop->tagged_must_kills = isl_union_map_intersect_params(
+        KillsInfo.TaggedMustKills.release(), TightContext.copy());
+    PPCGScop->must_kills = isl_union_map_intersect_params(
+        KillsInfo.MustKills.release(), TightContext.copy());
 
     PPCGScop->tagger = nullptr;
     PPCGScop->independence =
@@ -2845,7 +2866,8 @@ public:
     PPCGScop->dep_order = nullptr;
     PPCGScop->tagged_dep_order = nullptr;
 
-    PPCGScop->schedule = S->getScheduleTree().release();
+    PPCGScop->schedule = isl_schedule_intersect_domain(
+        S->getScheduleTree().release(), isl_union_set_copy(PPCGScop->domain));
     // If we have something non-trivial to kill, add it to the schedule
     if (KillsInfo.KillsSchedule.get())
       PPCGScop->schedule = isl_schedule_sequence(
@@ -2854,9 +2876,13 @@ public:
     PPCGScop->names = getNames();
     PPCGScop->pet = nullptr;
 
+    errs() << "PPCG createPPCGScop function\n";
     compute_tagger(PPCGScop);
+    errs() << "PPCG compute_tagger function finish\n";
     compute_dependences(PPCGScop);
+    errs() << "PPCG compute_dependences function finish\n";
     eliminate_dead_code(PPCGScop);
+    errs() << "PPCG eliminate_dead_code function finish\n";
 
     return PPCGScop;
   }
@@ -2885,7 +2911,7 @@ public:
       Access->exact_write = !Acc->isMayWrite();
       Access->ref_id = Acc->getId().release();
       Access->next = Accesses;
-      Access->n_index = Acc->getScopArrayInfo()->getNumberOfDimensions();
+      Access->n_index = Acc->getLatestScopArrayInfo()->getNumberOfDimensions();
       // TODO: Also mark one-element accesses to arrays as fixed-element.
       Access->fixed_element =
           Acc->isLatestScalarKind() ? isl_bool_true : isl_bool_false;
@@ -3327,7 +3353,9 @@ public:
     isl_options_set_schedule_maximize_band_depth(PPCGGen->ctx, true);
     isl_options_set_schedule_whole_component(PPCGGen->ctx, false);
 
+    errs() << "before get_schedule\n";
     isl_schedule *Schedule = get_schedule(PPCGGen);
+    errs() << "after get_schedule\n";
 
     int HasPermutable = has_any_permutable_node(Schedule);
 
