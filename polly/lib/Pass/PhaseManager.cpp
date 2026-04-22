@@ -194,8 +194,10 @@ public:
       FAM.invalidate(F, PA);
       PA = ADCEPass().run(F, FAM);
       FAM.invalidate(F, PA);
-      // PA = LowerInstructionForReductionPass().run(F, FAM);
-      // FAM.invalidate(F, PA);
+      if (false and readBackend(F) == Backend::GPU) {
+        PA = LowerInstructionForReductionPass().run(F, FAM);
+        FAM.invalidate(F, PA);
+      }
     }
 
     // Can't do anything without detection
