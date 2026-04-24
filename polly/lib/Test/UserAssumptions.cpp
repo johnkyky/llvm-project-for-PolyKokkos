@@ -543,17 +543,23 @@ parseComparisons(const std::string &AssumptionsStr,
                            Twine(CompStdStr) + "'");
       }
 
-      size_t LHSDim = LoopBoundAnalysis::getNumDimForPolicy(
-          LoopBoundPolicyVec, LHSBound.PolicyIndex);
+      if (LHSBound.HasBoundIndex) {
+        Comparison Comp{LHSBound, Op, RHSLiteral};
+        Results.push_back(Comp);
+      } else {
+        size_t LHSDim = LoopBoundAnalysis::getNumDimForPolicy(
+            LoopBoundPolicyVec, LHSBound.PolicyIndex);
 
-      for (size_t Dim = 0; Dim < LHSDim; ++Dim) {
-        PolicyBound LBoundLower = LHSBound;
-        LBoundLower.BoundType = LHSBound.BoundType;
-        LBoundLower.BoundIndex = Dim;
-        LBoundLower.HasBoundType = true;
+        for (size_t Dim = 0; Dim < LHSDim; ++Dim) {
+          PolicyBound LBound = LHSBound;
+          LBound.BoundType = LHSBound.BoundType;
+          LBound.BoundIndex = Dim;
+          LBound.HasBoundType = true;
+          LBound.HasBoundIndex = true;
 
-        Comparison CompLower{LBoundLower, Op, RHSLiteral};
-        Results.push_back(CompLower);
+          Comparison CompLower{LBound, Op, RHSLiteral};
+          Results.push_back(CompLower);
+        }
       }
       continue;
     }
