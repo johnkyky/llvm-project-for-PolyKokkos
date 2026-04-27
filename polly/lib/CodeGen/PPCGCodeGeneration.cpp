@@ -3973,8 +3973,8 @@ public:
       return;
     }
 
-    // Lambda pour l'impression des objets ISL
-    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn) {
+    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn,
+                             int Format = ISL_FORMAT_ISL) {
       llvm::errs() << "  * " << Name << ": ";
       if (!Obj) {
         llvm::errs() << "(NULL)\n";
@@ -3982,8 +3982,7 @@ public:
       }
       isl_printer *P = isl_printer_to_str(Ctx);
 
-      // Pour l'AST, le format bloc (C-like) est beaucoup plus lisible
-      P = isl_printer_set_output_format(P, ISL_FORMAT_C);
+      P = isl_printer_set_output_format(P, Format);
 
       P = PrintFn(P, Obj);
       char *Str = isl_printer_get_str(P);
@@ -4024,7 +4023,7 @@ public:
     if (Gen->tree) {
       llvm::errs()
           << "---------------------------------------------------------\n";
-      PrintISLObj("Tree", Gen->tree, isl_printer_print_ast_node);
+      PrintISLObj("Tree", Gen->tree, isl_printer_print_ast_node, ISL_FORMAT_C);
       llvm::errs()
           << "---------------------------------------------------------\n";
     } else {
