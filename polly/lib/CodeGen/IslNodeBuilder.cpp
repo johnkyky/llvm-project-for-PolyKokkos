@@ -1396,8 +1396,8 @@ bool IslNodeBuilder::preloadInvariantLoads() {
   std::string StrTest;
   llvm::raw_string_ostream OS(StrTest);
   OS << InvariantEquivClasses.size();
-  RuntimeDebugBuilder::createCPUPrinter(
-      Builder, "InvariantEquivClasses Size : ", StrTest, "\n");
+  // RuntimeDebugBuilder::createCPUPrinter(
+  //     Builder, "InvariantEquivClasses Size : ", StrTest, "\n");
 
   for (auto &IAClass : InvariantEquivClasses) {
     errs().indent(2) << "Preloading invariant equivalence class for pointer "
@@ -1452,22 +1452,22 @@ bool IslNodeBuilder::preloadInvariantLoads() {
 
     std::string VarName = OS.str();
 
-    RuntimeDebugBuilder::createCPUPrinter(Builder, VarName,
-                                          "--- Valeurs des composants---\n");
-    ExploreAndPrint(IAClass.IdentifyingPointer);
-    RuntimeDebugBuilder::createCPUPrinter(Builder,
-                                          "------------------------------\n");
+    // RuntimeDebugBuilder::createCPUPrinter(Builder, VarName,
+    //                                       "--- Valeurs des composants---\n");
+    // ExploreAndPrint(IAClass.IdentifyingPointer);
+    // RuntimeDebugBuilder::createCPUPrinter(Builder,
+    //                                       "------------------------------\n");
     if (!preloadInvariantEquivClass(IAClass)) {
       errs() << "failed\n";
       return false;
     }
-    RuntimeDebugBuilder::createCPUPrinter(Builder, "Juste apres\n");
+    // RuntimeDebugBuilder::createCPUPrinter(Builder, "Juste apres\n");
 
     errs() << "succeeded\n";
     errs() << "\n\n";
   }
-  RuntimeDebugBuilder::createCPUPrinter(Builder,
-                                        "Polly: Apres invariant loads\n");
+  // RuntimeDebugBuilder::createCPUPrinter(Builder,
+  //                                       "Polly: Apres invariant loads\n");
 
   return true;
 }
