@@ -1885,12 +1885,6 @@ void GPUNodeBuilder::createKernel(__isl_take isl_ast_node *KernelStmt) {
   BlockGen.updateGenLI(GenLI);
   BlockGen.updateGenSE(GenSE);
 
-  errs() << "\n\n=========================================================\n";
-  errs() << "               AST DU KERNEL GPU (PPCG)                  \n";
-  errs() << "=========================================================\n";
-  dumpIslAstNode(Kernel->tree);
-  errs() << "=========================================================\n\n";
-
   create(isl_ast_node_copy(Kernel->tree));
 
   GenDT = HostDT;
@@ -2435,12 +2429,6 @@ std::string GPUNodeBuilder::createKernelASM() {
       GPUTriple, Subtarget, "", Options, std::nullopt));
 
   GPUModule->setDataLayout(TargetM->createDataLayout());
-
-  errs() << "\n\n=========================================================\n";
-  errs() << "               LLVM IR DU KERNEL GPU                     \n";
-  errs() << "=========================================================\n";
-  GPUModule->print(errs(), nullptr);
-  errs() << "=========================================================\n\n";
 
   SmallString<0> ASMString;
   raw_svector_ostream ASMStream(ASMString);
