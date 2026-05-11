@@ -3128,6 +3128,31 @@ public:
       PPCGArray.extent = nullptr;
       PPCGArray.n_index = Array->getNumberOfDimensions();
       PPCGArray.extent = getExtent(Array).release();
+      if (isl_set_is_empty(PPCGProg->array[I].extent)) {
+        ScopArrayInfo *SAI = ValidSAIs[I];
+
+        isl::set RebuiltExtent =
+            isl::set::empty(isl::manage_copy(PPCGArray.extent).space());
+
+        for (ScopStmt &Stmt : *S) {
+          for (polly::MemoryAccess *MA : Stmt) {
+            if (MA->getLatestScopArrayInfo() == SAI) {
+              isl::map AccRel = MA->getAccessRelation();
+              isl::set Dom = Stmt.getDomain();
+              AccRel = AccRel.intersect_domain(Dom);
+              RebuiltExtent = RebuiltExtent.unite(AccRel.range());
+            }
+          }
+        }
+
+        RebuiltExtent = RebuiltExtent.coalesce().simple_hull();
+
+        isl_set_free(PPCGArray.extent);
+        PPCGProg->array[I].extent = RebuiltExtent.release();
+
+        errs() << "FIX-POLLY: Extent reconstruit pour " << SAI->getName()
+               << "\n";
+      }
       PPCGArray.n_ref = 0;
       PPCGArray.refs = nullptr;
       PPCGArray.accessed = true;
@@ -3198,7 +3223,16 @@ public:
     //     2. Arrays with statically known zero size.
     auto ValidSAIsRange =
         make_filter_range(S->arrays(), [this](ScopArrayInfo *SAI) -> bool {
-          return !getExtent(SAI).is_empty();
+          if (!getExtent(SAI).is_empty())
+            return true;
+
+          for (ScopStmt &Stmt : *S) {
+            for (polly::MemoryAccess *MA : Stmt) {
+              if (MA->getLatestScopArrayInfo() == SAI)
+                return true;
+            }
+          }
+          return false;
         });
     SmallVector<ScopArrayInfo *, 4> ValidSAIs(ValidSAIsRange.begin(),
                                               ValidSAIsRange.end());
