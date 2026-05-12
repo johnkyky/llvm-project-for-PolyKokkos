@@ -1489,6 +1489,9 @@ void ScopBuilder::addUserAssumptions(
       NewParams.insert(Param);
     }
 
+    if (!NewParams.empty())
+      continue;
+
     SmallVector<isl_set *, 2> ConditionSets;
     auto *TI = InScop ? CI->getParent()->getTerminator() : nullptr;
     BasicBlock *BB = InScop ? CI->getParent() : R.getEntry();
