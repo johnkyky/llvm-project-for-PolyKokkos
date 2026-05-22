@@ -3303,13 +3303,13 @@ public:
   /// Print C code corresponding to the control flow in @p Kernel.
   ///
   /// @param Kernel The kernel to print
-  void printKernel(ppcg_kernel *Kernel) {
+  void printKernel(ppcg_kernel *Kernel, llvm::raw_ostream &OS) {
     auto *P = isl_printer_to_str(S->getIslCtx().get());
     P = isl_printer_set_output_format(P, ISL_FORMAT_C);
     auto *Options = isl_ast_print_options_alloc(S->getIslCtx().get());
     P = isl_ast_node_print(Kernel->tree, P, Options);
     char *String = isl_printer_get_str(P);
-    outs() << String << "\n";
+    OS << String << "\n";
     free(String);
     isl_printer_free(P);
   }
@@ -3318,7 +3318,8 @@ public:
   ///
   /// @param Tree An AST describing GPU code
   /// @param PPCGProg The PPCG program from which @Tree has been constructed.
-  void printGPUTree(isl_ast_node *Tree, gpu_prog *PPCGProg) {
+  void printGPUTree(isl_ast_node *Tree, gpu_prog *PPCGProg,
+                    llvm::raw_ostream &OS) {
     auto *P = isl_printer_to_str(S->getIslCtx().get());
     P = isl_printer_set_output_format(P, ISL_FORMAT_C);
 
@@ -3330,14 +3331,14 @@ public:
         isl_ast_print_options_set_print_user(Options, printHostUser, &Data);
     P = isl_ast_node_print(Tree, P, Options);
     char *String = isl_printer_get_str(P);
-    outs() << "# host\n";
-    outs() << String << "\n";
+    OS << "# host\n";
+    OS << String << "\n";
     free(String);
     isl_printer_free(P);
 
     for (auto *Kernel : Data.Kernels) {
-      outs() << "# kernel" << Kernel->id << "\n";
-      printKernel(Kernel);
+      OS << "# kernel" << Kernel->id << "\n";
+      printKernel(Kernel, errs());
     }
   }
 
@@ -3394,6 +3395,7 @@ public:
       PPCGGen->tree = generate_code(PPCGGen, isl_schedule_copy(Schedule));
     }
 
+    auto &StreamOutput = outs();
     if (DumpSchedule) {
       isl_printer *P = isl_printer_to_str(S->getIslCtx().get());
       P = isl_printer_set_yaml_style(P, ISL_YAML_STYLE_BLOCK);
@@ -3404,17 +3406,17 @@ public:
       else
         P = isl_printer_print_str(P, "No schedule found\n");
 
-      outs() << isl_printer_get_str(P) << "\n";
+      StreamOutput << isl_printer_get_str(P) << "\n";
       isl_printer_free(P);
     }
 
     if (DumpCode) {
-      outs() << "Code\n";
-      outs() << "====\n";
+      StreamOutput << "Code\n";
+      StreamOutput << "====\n";
       if (PPCGGen->tree)
-        printGPUTree(PPCGGen->tree, PPCGProg);
+        printGPUTree(PPCGGen->tree, PPCGProg, StreamOutput);
       else
-        outs() << "No code generated\n";
+        StreamOutput << "No code generated\n";
     }
 
     isl_schedule_free(Schedule);
