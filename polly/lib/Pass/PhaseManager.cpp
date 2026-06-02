@@ -223,7 +223,6 @@ public:
     if (not Opts.isPhaseEnabled(PassPhase::Detection) or
         (Opts.isPhaseEnabled(PassPhase::Detection) and
          (F.getMetadata("polly") or F.hasFnAttribute("polly.findSCoP")))) {
-      errs() << "on fait la recherche des scop dans " << F.getName() << "\n";
       SD.detect(F);
     }
 

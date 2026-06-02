@@ -2089,9 +2089,6 @@ ScopDetection ScopAnalysis::run(Function &F, FunctionAnalysisManager &FAM) {
   if (not PollyManualDetection or
       (PollyManualDetection and
        (F.getMetadata("polly") or F.hasFnAttribute("polly.findSCoP")))) {
-    LLVM_DEBUG(errs() << "on fait la recherche des scop dans " << F.getName()
-                      << "\n");
-
     Result.detect(F);
   }
   return Result;
