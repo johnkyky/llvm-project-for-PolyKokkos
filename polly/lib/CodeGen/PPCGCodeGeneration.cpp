@@ -666,13 +666,16 @@ private:
   /// Create a PTX assembly string for the current GPU kernel.
   ///
   /// @returns A string containing the corresponding PTX assembly code.
-  std::string createKernelASM();
+  std::string createKernelASM(TargetMachine *TM);
 
   /// Check if the scop requires to be linked with CUDA's libdevice.
   bool requiresCUDALibDevice();
 
   /// Link with the NVIDIA libdevice library (if needed and available).
   void addCUDALibDevice();
+
+  // Create a target machine for the GPU kernel.
+  std::unique_ptr<llvm::TargetMachine> createGPUTargetMachine();
 
   /// Finalize the generation of the kernel function.
   ///
@@ -2379,22 +2382,8 @@ void GPUNodeBuilder::createKernelFunction(
   }
 }
 
-std::string GPUNodeBuilder::createKernelASM() {
-  llvm::Triple GPUTriple;
-
-  switch (Arch) {
-  case GPUArch::NVPTX64:
-    switch (Runtime) {
-    case GPURuntime::CUDA:
-      GPUTriple = llvm::Triple(Triple::normalize("nvptx64-nvidia-cuda"));
-      break;
-    case GPURuntime::OpenCL:
-      GPUTriple = llvm::Triple(Triple::normalize("nvptx64-nvidia-nvcl"));
-      break;
-    }
-    break;
-  case GPUArch::SPIR64:
-  case GPUArch::SPIR32:
+std::string GPUNodeBuilder::createKernelASM(TargetMachine *TM) {
+  if (Arch == GPUArch::SPIR64 || Arch == GPUArch::SPIR32) {
     std::string SPIRAssembly;
     raw_string_ostream IROstream(SPIRAssembly);
     IROstream << *GPUModule;
@@ -2402,43 +2391,18 @@ std::string GPUNodeBuilder::createKernelASM() {
     return SPIRAssembly;
   }
 
-  std::string ErrMsg;
-  auto *GPUTarget = TargetRegistry::lookupTarget(GPUTriple, ErrMsg);
-
-  if (!GPUTarget) {
-    errs() << ErrMsg << "\n";
+  if (!TM)
     return "";
-  }
-
-  TargetOptions Options;
-  // TODO Ugo option doesn't exist in newer llvm versions
-  // Options.UnsafeFPMath = FastMath;
-
-  std::string Subtarget;
-
-  switch (Arch) {
-  case GPUArch::NVPTX64:
-    Subtarget = CudaVersion;
-    break;
-  case GPUArch::SPIR32:
-  case GPUArch::SPIR64:
-    llvm_unreachable("No subtarget for SPIR architecture");
-  }
-
-  std::unique_ptr<TargetMachine> TargetM(GPUTarget->createTargetMachine(
-      GPUTriple, Subtarget, "", Options, std::nullopt));
-
-  GPUModule->setDataLayout(TargetM->createDataLayout());
 
   SmallString<0> ASMString;
   raw_svector_ostream ASMStream(ASMString);
   llvm::legacy::PassManager PM;
 
-  PM.add(createTargetTransformInfoWrapperPass(TargetM->getTargetIRAnalysis()));
+  PM.add(createTargetTransformInfoWrapperPass(TM->getTargetIRAnalysis()));
 
-  if (TargetM->addPassesToEmitFile(PM, ASMStream, nullptr,
-                                   CodeGenFileType::AssemblyFile,
-                                   true /* verify */)) {
+  if (TM->addPassesToEmitFile(PM, ASMStream, nullptr,
+                              CodeGenFileType::AssemblyFile,
+                              true /* verify */)) {
     errs() << "The target does not support generation of this file type!\n";
     return "";
   }
@@ -2505,6 +2469,41 @@ void GPUNodeBuilder::addCUDALibDevice() {
   }
 }
 
+std::unique_ptr<llvm::TargetMachine> GPUNodeBuilder::createGPUTargetMachine() {
+  llvm::Triple GPUTriple;
+
+  switch (Arch) {
+  case GPUArch::NVPTX64:
+    switch (Runtime) {
+    case GPURuntime::CUDA:
+      GPUTriple = llvm::Triple(Triple::normalize("nvptx64-nvidia-cuda"));
+      break;
+    case GPURuntime::OpenCL:
+      GPUTriple = llvm::Triple(Triple::normalize("nvptx64-nvidia-nvcl"));
+      break;
+    }
+    break;
+  case GPUArch::SPIR64:
+  case GPUArch::SPIR32:
+    // SPIR n'a pas besoin de TargetMachine pour générer son IR
+    return nullptr;
+  }
+
+  std::string ErrMsg;
+  auto *GPUTarget = TargetRegistry::lookupTarget(GPUTriple, ErrMsg);
+
+  if (!GPUTarget) {
+    errs() << ErrMsg << "\n";
+    return nullptr;
+  }
+
+  TargetOptions Options;
+  std::string Subtarget = (Arch == GPUArch::NVPTX64) ? CudaVersion.c_str() : "";
+
+  return std::unique_ptr<TargetMachine>(GPUTarget->createTargetMachine(
+      GPUTriple, Subtarget, "", Options, std::nullopt));
+}
+
 std::string GPUNodeBuilder::finalizeKernelFunction() {
 
   if (verifyModule(*GPUModule)) {
@@ -2525,23 +2524,17 @@ std::string GPUNodeBuilder::finalizeKernelFunction() {
   if (DumpKernelIR)
     outs() << *GPUModule << "\n";
 
+  std::unique_ptr<TargetMachine> TM = createGPUTargetMachine();
+  if (TM)
+    GPUModule->setDataLayout(TM->createDataLayout());
+
   if (Arch != GPUArch::SPIR32 && Arch != GPUArch::SPIR64) {
-    // Optimize module.
-
-    // llvm::legacy::PassManager OptPasses;
-    // PassManagerBuilder PassBuilder;
-    // PassBuilder.OptLevel = 3;
-    // PassBuilder.SizeLevel = 0;
-    // PassBuilder.populateModulePassManager(OptPasses);
-    // OptPasses.run(*GPUModule);
-
-    // TODO Ugo to check if we can replace the above with the new pass manager
     LoopAnalysisManager LAM;
     FunctionAnalysisManager FAM;
     CGSCCAnalysisManager CGAM;
     ModuleAnalysisManager MAM;
 
-    PassBuilder PB;
+    PassBuilder PB(TM.get());
 
     PB.registerModuleAnalyses(MAM);
     PB.registerCGSCCAnalyses(CGAM);
@@ -2555,7 +2548,7 @@ std::string GPUNodeBuilder::finalizeKernelFunction() {
     MPM.run(*GPUModule, MAM);
   }
 
-  std::string Assembly = createKernelASM();
+  std::string Assembly = createKernelASM(TM.get());
 
   if (DumpKernelASM)
     outs() << Assembly << "\n";
