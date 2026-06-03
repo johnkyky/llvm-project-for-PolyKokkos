@@ -3375,6 +3375,7 @@ public:
     isl_options_set_schedule_outer_coincidence(PPCGGen->ctx, true);
     isl_options_set_schedule_maximize_band_depth(PPCGGen->ctx, true);
     isl_options_set_schedule_whole_component(PPCGGen->ctx, false);
+    isl_options_set_schedule_maximize_coincidence(PPCGGen->ctx, true);
 
     errs() << "before get_schedule\n";
     isl_schedule *Schedule = get_schedule(PPCGGen);
