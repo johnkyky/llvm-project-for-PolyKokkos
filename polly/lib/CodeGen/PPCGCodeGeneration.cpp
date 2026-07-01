@@ -2307,6 +2307,10 @@ void GPUNodeBuilder::createKernelVariables(ppcg_kernel *Kernel, Function *FN) {
     const ScopArrayInfo *SAI;
     Value *Allocation;
     if (Var.type == ppcg_access_shared) {
+      errs() << "\n[PPCG-Polly] Shared Memory allouée :\n";
+      errs() << "  - Name : " << Var.name << "\n";
+      errs() << "  - Type : " << *ArrayTy << "\n";
+
       auto *GlobalVar = new GlobalVariable(
           *M, ArrayTy, false, GlobalValue::InternalLinkage, 0, Var.name,
           nullptr, GlobalValue::ThreadLocalMode::NotThreadLocal, 3);
@@ -2315,6 +2319,10 @@ void GPUNodeBuilder::createKernelVariables(ppcg_kernel *Kernel, Function *FN) {
 
       Allocation = GlobalVar;
     } else if (Var.type == ppcg_access_private) {
+      errs() << "\n[PPCG-Polly] Private Memory allouée :\n";
+      errs() << "  - Name : " << Var.name << "\n";
+      errs() << "  - Type : " << *ArrayTy << "\n";
+
       Allocation = Builder.CreateAlloca(ArrayTy, 0, "private_array");
     } else {
       llvm_unreachable("unknown variable type");
@@ -2663,7 +2671,7 @@ public:
 
     Options->use_private_memory = PrivateMemory;
     Options->use_shared_memory = SharedMemory;
-    Options->max_shared_memory = 48 * 1024;
+    Options->max_shared_memory = 16 * 1024;
 
     Options->target = PPCG_TARGET_CUDA;
     Options->openmp = false;
@@ -3360,6 +3368,10 @@ public:
     PPCGGen->types.n = 0;
     PPCGGen->types.name = nullptr;
     PPCGGen->sizes = nullptr;
+    isl::union_map TileSizes(
+        PPCGGen->ctx, "{kernel[i]->tile[32,32,32]; kernel[i]->block[32,4]}");
+    PPCGGen->sizes = TileSizes.release();
+
     PPCGGen->used_sizes = nullptr;
     PPCGGen->kernel_id = 0;
 
@@ -3979,79 +3991,6 @@ public:
         << "=========================================================\n\n";
   }
 
-  void dumpGpuGen(const struct gpu_gen *Gen) {
-    if (!Gen) {
-      llvm::errs() << "=== GPU GEN is NULL ===\n";
-      return;
-    }
-
-    isl_ctx *Ctx = Gen->ctx;
-    if (!Ctx) {
-      llvm::errs() << "=== GPU GEN (ISL Context is NULL) ===\n";
-      return;
-    }
-
-    auto PrintISLObj = [Ctx](const char *Name, auto *Obj, auto PrintFn,
-                             int Format = ISL_FORMAT_ISL) {
-      llvm::errs() << "  * " << Name << ": ";
-      if (!Obj) {
-        llvm::errs() << "(NULL)\n";
-        return;
-      }
-      isl_printer *P = isl_printer_to_str(Ctx);
-
-      P = isl_printer_set_output_format(P, Format);
-
-      P = PrintFn(P, Obj);
-      char *Str = isl_printer_get_str(P);
-      llvm::errs() << (Str ? Str : "(ERROR)") << "\n";
-      free(Str);
-      isl_printer_free(P);
-    };
-
-    llvm::errs()
-        << "\n=========================================================\n";
-    llvm::errs()
-        << "                     GPU GEN DUMP                        \n";
-    llvm::errs()
-        << "=========================================================\n";
-
-    llvm::errs() << "[Metadata & Core Pointers]\n";
-    llvm::errs() << "  * ISL Context: " << (void *)Gen->ctx << "\n";
-    llvm::errs() << "  * Options:     "
-                 << (Gen->options ? "(present)" : "(NULL)") << "\n";
-    llvm::errs() << "  * GPU Prog:    " << (Gen->prog ? "(present)" : "(NULL)")
-                 << "\n";
-    llvm::errs() << "  * Kernel ID:   " << Gen->kernel_id
-                 << " (Next kernel to be generated)\n\n";
-
-    llvm::errs() << "[Callbacks (Function Pointers)]\n";
-    llvm::errs() << "  * print_ast_expr: " << (void *)Gen->print
-                 << " (User: " << Gen->print_user << ")\n";
-    llvm::errs() << "  * build_ast_expr: " << (void *)Gen->build_ast_expr
-                 << "\n\n";
-
-    llvm::errs() << "[Kernel Sizing (Block & Grid configurations)]\n";
-    PrintISLObj("Requested Sizes", Gen->sizes, isl_printer_print_union_map);
-    PrintISLObj("Used Sizes     ", Gen->used_sizes,
-                isl_printer_print_union_map);
-    llvm::errs() << "\n";
-
-    llvm::errs() << "[Generated AST (The Code!)]\n";
-    if (Gen->tree) {
-      llvm::errs()
-          << "---------------------------------------------------------\n";
-      PrintISLObj("Tree", Gen->tree, isl_printer_print_ast_node, ISL_FORMAT_C);
-      llvm::errs()
-          << "---------------------------------------------------------\n";
-    } else {
-      llvm::errs() << "  * Tree: (NULL) -> No code was generated!\n";
-    }
-
-    llvm::errs()
-        << "=========================================================\n\n";
-  }
-
   bool run(Scop &Scop, LoopInfo &LInfo, DominatorTree &DTree,
            ScalarEvolution &SEvolution, const DataLayout &DLayout,
            RegionInfo &RInfo) {
@@ -4083,7 +4022,6 @@ public:
     auto *PPCGProg = createPPCGProg(PPCGScop);
     dumpGpuProg(PPCGProg);
     auto *PPCGGen = generateGPU(PPCGScop, PPCGProg);
-    dumpGpuGen(PPCGGen);
 
     if (PPCGGen->tree) {
       generateCode(isl_ast_node_copy(PPCGGen->tree), PPCGProg);
