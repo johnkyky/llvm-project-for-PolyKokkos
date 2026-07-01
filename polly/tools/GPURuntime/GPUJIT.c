@@ -1413,7 +1413,19 @@ static void launchKernelCUDA(PollyGPUFunction *Kernel, unsigned int GridDimX,
                            GridDimY, GridDimZ, BlockDimX, BlockDimY, BlockDimZ,
                            SharedMemBytes, Stream, Parameters, Extra);
   if (Res != CUDA_SUCCESS) {
-    fprintf(stderr, "Launching CUDA kernel failed.\n");
+    const char *errName = "Unknown";
+    const char *errDesc = "Unknown";
+    // cuGetErrorName et cuGetErrorString font partie de l'API Driver de CUDA
+    cuGetErrorName(Res, &errName);
+    cuGetErrorString(Res, &errDesc);
+
+    fprintf(stderr, "\n--- FATAL: Launching CUDA kernel failed ---\n");
+    fprintf(stderr, "CUDA Error [%d]: %s - %s\n", Res, errName, errDesc);
+    fprintf(stderr, "Grid Dim:  %u x %u x %u\n", GridDimX, GridDimY, GridDimZ);
+    fprintf(stderr, "Block Dim: %u x %u x %u\n", BlockDimX, BlockDimY,
+            BlockDimZ);
+    fprintf(stderr, "Shared Mem: %u bytes\n", SharedMemBytes);
+    fprintf(stderr, "-------------------------------------------\n");
     exit(-1);
   }
 }
