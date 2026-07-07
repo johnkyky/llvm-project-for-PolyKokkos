@@ -277,6 +277,11 @@ Value *getBooleanValue(ICmpInst *ICmp) {
       llvm_unreachable("Something's wrong with loop bound condition");
     return ConstantInt::getTrue(ICmp->getContext());
   }
+  case ICmpInst::ICMP_SLT: {
+    if (ZeroOpIndex == 1)
+      llvm_unreachable("Something's wrong with loop bound condition");
+    return ConstantInt::getTrue(ICmp->getContext());
+  }
   default:
     errs() << *ICmp->getParent() << "\n";
     llvm_unreachable("Unsupported loop bound condition in getBooleanValue");
@@ -309,7 +314,8 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
   SmallVector<HoistedData, 2> ToChangee;
   for (auto &BB : F) {
     for (auto &I : BB) {
-      if (not I.hasMetadata("cond_variable_annotation") or
+      if ((not I.hasMetadata("cond_variable_annotation") and
+           not I.hasMetadata("old_loop_bound")) or
           I.hasMetadata("used_for_versioning"))
         continue;
 
@@ -373,9 +379,9 @@ void removeLoopBoundVarConditions(Function &F, AssumptionCache &AC) {
         HasConstant = true;
       } else {
         if (not HasConstant) {
-          continue;
           errs() << "Invalid loop bound condition with variable "
                     "without constant\n";
+          continue;
         }
         HD.VarLoopBound = dyn_cast_or_null<Instruction>(Op1);
       }
