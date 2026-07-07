@@ -273,8 +273,6 @@ Value *getBooleanValue(ICmpInst *ICmp) {
   case ICmpInst::ICMP_ULT:
   case ICmpInst::ICMP_UGT:
   case ICmpInst::ICMP_SGT: {
-    if (ZeroOpIndex == 0)
-      llvm_unreachable("Something's wrong with loop bound condition");
     return ConstantInt::getTrue(ICmp->getContext());
   }
   case ICmpInst::ICMP_SLT: {
