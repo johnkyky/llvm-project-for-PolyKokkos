@@ -360,6 +360,9 @@ public:
 
       bool ModifiedByCodeGen = false;
       if (readBackend(F) == Backend::GPU) {
+#ifndef GPU_CODEGEN
+        llvm::report_fatal_error("GPU codegen is not supported");
+#endif
         ModifiedByCodeGen = runPPCGCodeGeneration(*S, LI2, DT2, SE, DL, RI);
       } else {
         // Phase: opt-isl
