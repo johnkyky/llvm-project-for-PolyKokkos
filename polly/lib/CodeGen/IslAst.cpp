@@ -87,6 +87,12 @@ static cl::opt<bool>
                   cl::desc("Print the ISL abstract syntax tree"),
                   cl::cat(PollyCategory));
 
+llvm::cl::opt<int> PollyParallelMinIters(
+    "polly-parallel-min-iters",
+    llvm::cl::desc("Minimum number of iterations to parallelize a loop "
+                   "(Run-time check). Zero or negative number to disable."),
+    llvm::cl::Hidden, llvm::cl::init(0));
+
 STATISTIC(ScopsProcessed, "Number of SCoPs processed");
 STATISTIC(ScopsBeneficial, "Number of beneficial SCoPs");
 STATISTIC(BeneficialAffineLoops, "Number of beneficial affine loops");
@@ -176,7 +182,7 @@ static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
   const std::string KnownParallelStr = "#pragma known-parallel";
   const std::string DepDisPragmaStr = "#pragma minimal dependence distance: ";
   const std::string SimdPragmaStr = "#pragma simd";
-  const std::string OmpPragmaStr = "#pragma omp parallel for";
+  std::string OmpPragmaStr = "#pragma omp parallel for";
 
   if (!DD.is_null())
     Printer = printLine(Printer, DepDisPragmaStr, DD.get());
@@ -186,9 +192,29 @@ static isl_printer *cbPrintFor(__isl_take isl_printer *Printer,
 
   bool OptPollyParallel = *((bool *)User);
   if (IslAstInfo::isExecutedInParallel(isl::manage_copy(Node),
-                                       OptPollyParallel))
+                                       OptPollyParallel)) {
+    if (isl_ast_node_get_type(Node) == isl_ast_node_for) {
+      bool IsInnermost = IslAstInfo::isInnermost(isl::manage_copy(Node));
+      if (IsInnermost and PollyParallelMinIters > 0) {
+        isl_ast_expr *CondExpr = isl_ast_node_for_get_cond(Node);
+
+        isl_printer *ExprPrinter =
+            isl_printer_to_str(isl_ast_node_get_ctx(Node));
+        ExprPrinter = isl_printer_set_output_format(ExprPrinter, ISL_FORMAT_C);
+        ExprPrinter = isl_printer_print_ast_expr(ExprPrinter, CondExpr);
+        char *CondText = isl_printer_get_str(ExprPrinter);
+
+        OmpPragmaStr += " /* if (" + std::string(CondText) +
+                        ") yields >= " + std::to_string(PollyParallelMinIters) +
+                        " iters */";
+
+        free(CondText);
+        isl_printer_free(ExprPrinter);
+        isl_ast_expr_free(CondExpr);
+      }
+    }
     Printer = printLine(Printer, OmpPragmaStr);
-  else if (IslAstInfo::isOutermostParallel(isl::manage_copy(Node)))
+  } else if (IslAstInfo::isOutermostParallel(isl::manage_copy(Node)))
     Printer = printLine(Printer, KnownParallelStr + BrokenReductionsStr);
 
   return isl_ast_node_for_print(Node, Printer, Options);
@@ -626,8 +652,7 @@ bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node) {
   //       executed. This can possibly require run-time checks, which again
   //       raises the question of both run-time check overhead and code size
   //       costs.
-  if (!PollyParallelForce &&
-      (isInnermost(Node) and not isOutermostParallel(Node)))
+  if (!PollyParallelForce && isInnermost(Node))
     return false;
 
   return isOutermostParallel(Node) && !isReductionParallel(Node);
@@ -647,9 +672,10 @@ bool IslAstInfo::isExecutedInParallel(const isl::ast_node &Node,
   //       executed. This can possibly require run-time checks, which again
   //       raises the question of both run-time check overhead and code size
   //       costs.
-  if (!PollyParallelForce &&
-      (isInnermost(Node) and not isOutermostParallel(Node)))
-    return false;
+  if (PollyParallelMinIters <= 0) {
+    if (!PollyParallelForce && isInnermost(Node))
+      return false;
+  }
 
   return isOutermostParallel(Node) && !isReductionParallel(Node);
 }

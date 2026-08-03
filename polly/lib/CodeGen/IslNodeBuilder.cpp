@@ -115,6 +115,8 @@ static cl::opt<OpenMPBackend> PollyOmpBackend(
                clEnumValN(OpenMPBackend::LLVM, "LLVM", "LLVM OpenMP")),
     cl::Hidden, cl::init(OpenMPBackend::GNU), cl::cat(PollyCategory));
 
+extern llvm::cl::opt<int> PollyParallelMinIters;
+
 isl::ast_expr IslNodeBuilder::getUpperBound(isl::ast_node_for For,
                                             ICmpInst::Predicate &Predicate) {
   isl::ast_expr Cond = For.cond();
@@ -707,7 +709,84 @@ void IslNodeBuilder::createFor(__isl_take isl_ast_node *For) {
     Cond = IslAstInfo::isExecutedInParallel(isl::manage_copy(For));
 
   if (Cond) {
-    errs() << "C'est une boucle parallel!\n";
+    bool IsInnermost = IslAstInfo::isInnermost(isl::manage_copy(For));
+
+    if (PollyParallelMinIters <= 0 or !IsInnermost) {
+      createForParallel(For);
+      return;
+    }
+
+    llvm::Value *IsParallelCmp = nullptr;
+    isl_ast_expr *CondExpr = isl_ast_node_for_get_cond(For);
+
+    if (isl_ast_expr_get_type(CondExpr) == isl_ast_expr_op) {
+      isl_ast_op_type OpType = isl_ast_expr_get_op_type(CondExpr);
+
+      if (OpType == isl_ast_op_lt || OpType == isl_ast_op_le) {
+        isl_ast_expr *InitExpr = isl_ast_node_for_get_init(For);
+        isl_ast_expr *UBExpr = isl_ast_expr_get_op_arg(CondExpr, 1);
+
+        llvm::Value *UB = ExprBuilder.create(UBExpr);
+        llvm::Value *Init = ExprBuilder.create(InitExpr);
+
+        UB = Builder.CreateSExtOrTrunc(UB, Builder.getInt64Ty());
+        Init = Builder.CreateSExtOrTrunc(Init, Builder.getInt64Ty());
+
+        llvm::Value *Diff = Builder.CreateSub(UB, Init);
+
+        IsParallelCmp = Builder.CreateICmpSGE(
+            Diff, Builder.getInt64(PollyParallelMinIters));
+      }
+    }
+    isl_ast_expr_free(CondExpr);
+
+    if (IsParallelCmp) {
+      llvm::BasicBlock *InsertBB = Builder.GetInsertBlock();
+      llvm::Instruction *SplitPt = &*Builder.GetInsertPoint();
+
+      llvm::BasicBlock *MergeBB = llvm::SplitBlock(InsertBB, SplitPt, &DT, &LI);
+
+      llvm::Function *F = InsertBB->getParent();
+      llvm::BasicBlock *ParallelBB = llvm::BasicBlock::Create(
+          F->getContext(), "polly.par.check", F, MergeBB);
+      llvm::BasicBlock *SequentialBB = llvm::BasicBlock::Create(
+          F->getContext(), "polly.seq.check", F, MergeBB);
+
+      DT.addNewBlock(ParallelBB, InsertBB);
+      DT.addNewBlock(SequentialBB, InsertBB);
+      if (llvm::Loop *L = LI.getLoopFor(InsertBB)) {
+        L->addBasicBlockToLoop(ParallelBB, LI);
+        L->addBasicBlockToLoop(SequentialBB, LI);
+      }
+
+      Builder.SetInsertPoint(ParallelBB);
+      llvm::BranchInst *ParBr = Builder.CreateBr(MergeBB);
+
+      Builder.SetInsertPoint(SequentialBB);
+      llvm::BranchInst *SeqBr = Builder.CreateBr(MergeBB);
+
+      llvm::Instruction *OldBr = InsertBB->getTerminator();
+      Builder.SetInsertPoint(OldBr);
+      Builder.CreateCondBr(IsParallelCmp, ParallelBB, SequentialBB);
+      OldBr->eraseFromParent();
+
+      Builder.SetInsertPoint(ParBr);
+      createForParallel(isl_ast_node_copy(For));
+
+      Builder.SetInsertPoint(SeqBr);
+      bool Parallel = (IslAstInfo::isParallel(isl::manage_copy(For)) &&
+                       !IslAstInfo::isReductionParallel(isl::manage_copy(For)));
+      createForSequential(
+          isl::manage(isl_ast_node_copy(For)).as<isl::ast_node_for>(),
+          Parallel);
+
+      Builder.SetInsertPoint(&MergeBB->front());
+      isl_ast_node_free(For);
+
+      return;
+    }
+
+    errs() << "C'est une boucle parallel (Condition statique)!\n";
     createForParallel(For);
     return;
   }
